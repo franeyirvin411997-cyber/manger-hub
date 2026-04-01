@@ -18,8 +18,8 @@ WORKDIR /app
 COPY --from=builder /manager /usr/local/bin/manager
 COPY --from=builder /node /usr/local/bin/node
 
-# 安装执行环境所需依赖：docker 客户端 (供 node 调用)
-RUN apk add --no-cache docker-cli
+# 安装执行环境所需依赖：tzdata 和 docker 客户端 (供 node 调用)
+RUN apk add --no-cache tzdata docker-cli
 
 EXPOSE 8080 50051
 
