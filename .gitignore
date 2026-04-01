@@ -1,0 +1,13 @@
+# Binaries
+/manager
+/node
+
+# Dependency directories
+/vendor/
+web/node_modules/
+
+# Build artifacts
+web/dist/
+
+# OS specific
+.DS_Store

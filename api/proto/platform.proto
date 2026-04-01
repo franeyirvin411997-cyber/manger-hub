@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package platform;
+
+option go_package = "platform/api/pb";
+
+// Node Registration Request
+message RegisterRequest {
+    string node_id = 1;
+    string hostname = 2;
+    string version = 3;
+    repeated string capabilities = 4; // 例如支持的隧道或能力
+}
+
+message RegisterResponse {
+    string token = 1;      // 签发的凭证
+    bool success = 2;
+    string message = 3;
+}
+
+// Node Heartbeat Data
+message HeartbeatRequest {
+    string node_id = 1;
+    string token = 2;
+    int64 timestamp = 3;
+    repeated Snapshot snapshots = 4; // 代理组快照状态
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    string message = 2;
+    repeated Task pending_tasks = 3; // 顺便下发任务（拉模式），也可以用流
+}
+
+message Snapshot {
+    string group_id = 1;
+    string state = 2; // running, stopped, error
+    string error_message = 3;
+}
+
+message Task {
+    string task_id = 1;
+    string operation_id = 2;
+    string type = 3; // create_group, delete_group, etc.
+    string payload_json = 4; // 结构化载荷
+}
+
+message TaskResult {
+    string task_id = 1;
+    string status = 2; // success, failed
+    string error_message = 3;
+    string result_json = 4;
+}
+
+message TaskResultResponse {
+    bool success = 1;
+}
+
+service NodeService {
+    // 节点注册
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+    // 节点心跳与状态上报
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    // 任务结果回传
+    rpc ReportTaskResult(TaskResult) returns (TaskResultResponse);
+}
