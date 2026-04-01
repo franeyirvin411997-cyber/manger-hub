@@ -167,6 +167,38 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 			// 清理遗留容器（兼容以前单一app命名的容器）
 			exec.Command("docker", "rm", "-f", fmt.Sprintf("app-%s", groupID)).Run()
 		}
+	} else if task.Type == "restart_group" {
+		var payload struct {
+			GroupID string `json:"group_id"`
+			Apps    string `json:"apps"`
+		}
+		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
+			groupID := payload.GroupID
+
+			// 解析可能启动过的应用容器名字
+			var appList []string
+			if payload.Apps != "" && payload.Apps != "[]" {
+				json.Unmarshal([]byte(payload.Apps), &appList)
+			} else {
+				appList = []string{"alpine"}
+			}
+
+			// 重启 tunnel
+			tunContainerName := fmt.Sprintf("tunnel-%s", groupID)
+			if err := exec.Command("docker", "restart", tunContainerName).Run(); err != nil {
+				resultStatus = "failed"
+				errMsg += fmt.Sprintf("Failed to restart tunnel: %v; ", err)
+			}
+
+			// 重启 app
+			for _, appIdentifier := range appList {
+				appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
+				if err := exec.Command("docker", "restart", appContainerName).Run(); err != nil {
+					resultStatus = "failed"
+					errMsg += fmt.Sprintf("Failed to restart %s container: %v; ", appIdentifier, err)
+				}
+			}
+		}
 	} else if task.Type == "replace_proxy" {
 		var payload struct {
 			GroupID      string `json:"group_id"`

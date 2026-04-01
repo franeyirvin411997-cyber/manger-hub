@@ -9,10 +9,14 @@
       <el-table-column prop="tunnel_type" label="隧道类型" width="120"></el-table-column>
       <el-table-column prop="apps" label="应用清单" width="200"></el-table-column>
       <el-table-column prop="created_at" label="创建时间"></el-table-column>
-      <el-table-column label="操作" width="200">
+      <el-table-column label="操作" width="380">
         <template #default="scope">
-          <el-button type="warning" size="small" @click="handleReplaceProxy(scope.row)">更换代理</el-button>
-          <el-button type="primary" size="small" @click="handleMigrateNode(scope.row)">迁移节点</el-button>
+          <el-button type="success" size="small" @click="handleLifecycle(scope.row.id, 'start')">启动</el-button>
+          <el-button type="info" size="small" @click="handleLifecycle(scope.row.id, 'stop')">停止</el-button>
+          <el-button type="warning" size="small" @click="handleLifecycle(scope.row.id, 'restart')">重启</el-button>
+          <el-button type="warning" size="small" @click="handleReplaceProxy(scope.row)">换代理</el-button>
+          <el-button type="primary" size="small" @click="handleMigrateNode(scope.row)">迁移</el-button>
+          <el-button type="danger" size="small" @click="handleDelete(scope.row.id)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -151,6 +155,27 @@ const submitForm = async () => {
     fetchData()
   } catch (err) {
     ElMessage.error('创建失败: ' + err.message)
+  }
+}
+
+const handleLifecycle = async (id, action) => {
+  try {
+    await axios.post(`/api/v1/groups/${id}/${action}`)
+    ElMessage.success('指令已下发')
+    fetchData()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '操作失败')
+  }
+}
+
+const handleDelete = async (id) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该代理组并释放代理吗？', '提示', { type: 'error' })
+    await axios.delete(`/api/v1/groups/${id}`)
+    ElMessage.success('代理组已删除')
+    fetchData()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '删除失败')
   }
 }
 

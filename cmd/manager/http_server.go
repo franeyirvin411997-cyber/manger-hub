@@ -53,6 +53,10 @@ func SetupGinRouter() *gin.Engine {
 		adminGroup.POST("/groups", createGroup)
 		adminGroup.POST("/groups/:id/replace_proxy", replaceProxy)
 		adminGroup.POST("/groups/:id/migrate_node", migrateNode)
+		adminGroup.POST("/groups/:id/start", startGroup)
+		adminGroup.POST("/groups/:id/stop", stopGroup)
+		adminGroup.POST("/groups/:id/restart", restartGroup)
+		adminGroup.DELETE("/groups/:id", deleteGroup)
 
 		// 应用模板
 		adminGroup.GET("/apps", getAppTemplates)
@@ -119,6 +123,13 @@ func addProxy(c *gin.Context) {
 		return
 	}
 
+	// 去重检测
+	var existing models.ProxyResource
+	if err := models.DB.Where("host = ? AND port = ?", req.Host, req.Port).First(&existing).Error; err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "该代理地址已存在资源池中"})
+		return
+	}
+
 	proxy := models.ProxyResource{
 		ID:       uuid.New().String(),
 		Host:     req.Host,
@@ -166,10 +177,18 @@ func uploadProxiesCSV(c *gin.Context) {
 		}
 
 		port, _ := strconv.Atoi(record[2])
+		host := record[1]
+
+		// 去重检测
+		var existing models.ProxyResource
+		if err := models.DB.Where("host = ? AND port = ?", host, port).First(&existing).Error; err == nil {
+			continue // 跳过重复记录
+		}
+
 		proxy := models.ProxyResource{
 			ID:       uuid.New().String(),
 			Protocol: record[0],
-			Host:     record[1],
+			Host:     host,
 			Port:     port,
 			Username: "",
 			Password: "",
@@ -472,6 +491,188 @@ func migrateNode(c *gin.Context) {
 	models.DB.Model(&models.GroupRuntime{}).Where("group_id = ?", groupID).Update("current_state", "node_migrating")
 
 	c.JSON(http.StatusOK, gin.H{"message": "节点迁移指令已下发"})
+}
+
+func startGroup(c *gin.Context) {
+	groupID := c.Param("id")
+
+	var spec models.GroupSpec
+	if err := models.DB.Where("id = ?", groupID).First(&spec).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "代理组不存在"})
+		return
+	}
+
+	var proxyURL string
+	var lease models.ProxyLease
+	var proxy models.ProxyResource
+	if err := models.DB.Where("id = ?", spec.ProxyLeaseID).First(&lease).Error; err == nil {
+		if err := models.DB.Where("id = ?", lease.ProxyResourceID).First(&proxy).Error; err == nil {
+			auth := ""
+			if proxy.Username != "" && proxy.Password != "" {
+				auth = fmt.Sprintf("%s:%s@", proxy.Username, proxy.Password)
+			}
+			proxyURL = fmt.Sprintf("%s://%s%s:%d", proxy.Protocol, auth, proxy.Host, proxy.Port)
+		}
+	}
+
+	var appList []string
+	json.Unmarshal([]byte(spec.Apps), &appList)
+	var appConfigs map[string]string
+	json.Unmarshal([]byte(spec.AppConfigs), &appConfigs)
+	resolvedApps, _ := resolveAppCommands(appList, appConfigs, groupID)
+	resolvedAppsBytes, _ := json.Marshal(resolvedApps)
+
+	payloadMap := map[string]string{
+		"group_id":      groupID,
+		"tunnel":        spec.TunnelType,
+		"proxy_url":     proxyURL,
+		"resolved_apps": string(resolvedAppsBytes),
+		"apps":          spec.Apps,
+	}
+	payloadBytes, _ := json.Marshal(payloadMap)
+
+	op := models.Operation{
+		ID:       uuid.New().String(),
+		Type:     "start_group",
+		TargetID: groupID,
+		Status:   "pending",
+	}
+
+	task := models.Task{
+		ID:          uuid.New().String(),
+		OperationID: op.ID,
+		NodeID:      spec.NodeID,
+		Type:        "start_group",
+		Payload:     string(payloadBytes),
+		Status:      "pending",
+		Timeout:     300,
+	}
+
+	models.DB.Create(&op)
+	models.DB.Create(&task)
+	models.DB.Model(&models.GroupRuntime{}).Where("group_id = ?", groupID).Update("current_state", "pending")
+
+	c.JSON(http.StatusOK, gin.H{"message": "启动指令已下发"})
+}
+
+func stopGroup(c *gin.Context) {
+	groupID := c.Param("id")
+
+	var spec models.GroupSpec
+	if err := models.DB.Where("id = ?", groupID).First(&spec).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "代理组不存在"})
+		return
+	}
+
+	payloadMap := map[string]string{"group_id": groupID, "apps": spec.Apps}
+	payloadBytes, _ := json.Marshal(payloadMap)
+
+	op := models.Operation{
+		ID:       uuid.New().String(),
+		Type:     "stop_group",
+		TargetID: groupID,
+		Status:   "pending",
+	}
+
+	task := models.Task{
+		ID:          uuid.New().String(),
+		OperationID: op.ID,
+		NodeID:      spec.NodeID,
+		Type:        "stop_group",
+		Payload:     string(payloadBytes),
+		Status:      "pending",
+		Timeout:     300,
+	}
+
+	models.DB.Create(&op)
+	models.DB.Create(&task)
+	models.DB.Model(&models.GroupRuntime{}).Where("group_id = ?", groupID).Update("current_state", "stopped")
+
+	c.JSON(http.StatusOK, gin.H{"message": "停止指令已下发"})
+}
+
+func restartGroup(c *gin.Context) {
+	groupID := c.Param("id")
+
+	var spec models.GroupSpec
+	if err := models.DB.Where("id = ?", groupID).First(&spec).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "代理组不存在"})
+		return
+	}
+
+	payloadMap := map[string]string{"group_id": groupID, "apps": spec.Apps}
+	payloadBytes, _ := json.Marshal(payloadMap)
+
+	op := models.Operation{
+		ID:       uuid.New().String(),
+		Type:     "restart_group",
+		TargetID: groupID,
+		Status:   "pending",
+	}
+
+	task := models.Task{
+		ID:          uuid.New().String(),
+		OperationID: op.ID,
+		NodeID:      spec.NodeID,
+		Type:        "restart_group",
+		Payload:     string(payloadBytes),
+		Status:      "pending",
+		Timeout:     300,
+	}
+
+	models.DB.Create(&op)
+	models.DB.Create(&task)
+	models.DB.Model(&models.GroupRuntime{}).Where("group_id = ?", groupID).Update("current_state", "pending")
+
+	c.JSON(http.StatusOK, gin.H{"message": "重启指令已下发"})
+}
+
+func deleteGroup(c *gin.Context) {
+	groupID := c.Param("id")
+
+	var spec models.GroupSpec
+	if err := models.DB.Where("id = ?", groupID).First(&spec).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "代理组不存在"})
+		return
+	}
+
+	// 1. 发送停止任务给节点
+	payloadMap := map[string]string{"group_id": groupID, "apps": spec.Apps}
+	payloadBytes, _ := json.Marshal(payloadMap)
+
+	op := models.Operation{
+		ID:       uuid.New().String(),
+		Type:     "delete_group",
+		TargetID: groupID,
+		Status:   "pending",
+	}
+
+	task := models.Task{
+		ID:          uuid.New().String(),
+		OperationID: op.ID,
+		NodeID:      spec.NodeID,
+		Type:        "stop_group",
+		Payload:     string(payloadBytes),
+		Status:      "pending",
+		Timeout:     300,
+	}
+
+	models.DB.Create(&op)
+	models.DB.Create(&task)
+
+	// 2. 释放代理
+	var lease models.ProxyLease
+	if err := models.DB.Where("id = ?", spec.ProxyLeaseID).First(&lease).Error; err == nil {
+		now := time.Now()
+		models.DB.Model(&lease).Updates(map[string]interface{}{"is_valid": false, "ended_at": &now})
+		models.DB.Model(&models.ProxyResource{}).Where("id = ?", lease.ProxyResourceID).Update("status", "online")
+	}
+
+	// 3. 删除数据库记录
+	models.DB.Where("group_id = ?", groupID).Delete(&models.GroupRuntime{})
+	models.DB.Where("id = ?", groupID).Delete(&models.GroupSpec{})
+
+	c.JSON(http.StatusOK, gin.H{"message": "代理组已删除并释放代理资源"})
 }
 
 func getOperations(c *gin.Context) {

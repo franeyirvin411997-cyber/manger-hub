@@ -2,11 +2,13 @@ package workers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/Knetic/govaluate"
 	"multi_node_platform/pkg/models"
+	"multi_node_platform/pkg/utils"
 )
 
 // StartRuleEngine 启动自动化运维规则引擎
@@ -109,6 +111,9 @@ func executeProxyAction(proxy models.ProxyResource, action string) {
 			"status":    "unknown",
 		})
 		log.Printf("[RuleEngine] 动作执行完毕: 已将代理 %s 降级回观察池", proxy.ID)
+	case "notify":
+		msg := fmt.Sprintf("Proxy [%s] matched rule triggering alert. Current status: %s", proxy.Host, proxy.Status)
+		utils.SendNotification("Rule Engine Alert: Proxy", msg)
 	}
 }
 
@@ -117,9 +122,11 @@ func executeGroupAction(rt models.GroupRuntime, action string) {
 	switch action {
 	case "restart_app":
 		if rt.CurrentState == "error" || rt.CurrentState == "stopped" {
-			// 在这儿应该创建一个 restart_group 的 Task (省略详细 Payload 组装)
 			log.Printf("[RuleEngine] 动作执行: 应该重启代理组 %s", rt.GroupID)
 			models.DB.Model(&rt).Update("current_state", "pending")
 		}
+	case "notify":
+		msg := fmt.Sprintf("Proxy Group [%s] matched rule triggering alert. Current state: %s", rt.GroupID, rt.CurrentState)
+		utils.SendNotification("Rule Engine Alert: Group", msg)
 	}
 }

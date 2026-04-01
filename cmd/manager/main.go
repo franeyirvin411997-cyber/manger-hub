@@ -22,6 +22,7 @@ func main() {
 	go workers.StartDriftChecker()
 	go workers.StartProxyLifecycleChecker()
 	go workers.StartRuleEngine()
+	go workers.StartDataCleaner()
 
 	// 启动 gRPC 服务用于与节点通信
 	go startGRPCServer(":50051")
