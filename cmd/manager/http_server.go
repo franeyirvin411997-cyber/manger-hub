@@ -56,6 +56,8 @@ func SetupGinRouter() *gin.Engine {
 
 		// 应用模板
 		adminGroup.GET("/apps", getAppTemplates)
+		adminGroup.POST("/apps", addAppTemplate)
+		adminGroup.DELETE("/apps/:id", deleteAppTemplate)
 
 		// 操作审计
 		adminGroup.GET("/operations", getOperations)
@@ -259,12 +261,21 @@ func createGroup(c *gin.Context) {
 		Status:   "pending",
 	}
 
+	// 解析应用清单和配置，转换为 Node 直接可执行的指令结构
+	var appList []string
+	json.Unmarshal([]byte(req.Apps), &appList)
+	var appConfigs map[string]string
+	json.Unmarshal([]byte(req.AppConfigs), &appConfigs)
+
+	resolvedApps, _ := resolveAppCommands(appList, appConfigs, groupID)
+	resolvedAppsBytes, _ := json.Marshal(resolvedApps)
+
 	payloadMap := map[string]string{
-		"group_id":    groupID,
-		"tunnel":      req.TunnelType,
-		"proxy_url":   proxyURL,
-		"apps":        req.Apps,
-		"app_configs": req.AppConfigs,
+		"group_id":      groupID,
+		"tunnel":        req.TunnelType,
+		"proxy_url":     proxyURL,
+		"resolved_apps": string(resolvedAppsBytes),
+		"apps":          req.Apps, // 保留原始引用方便追溯
 	}
 	payloadBytes, _ := json.Marshal(payloadMap)
 
@@ -336,12 +347,21 @@ func replaceProxy(c *gin.Context) {
 		Status:   "pending",
 	}
 
+	// 解析应用清单和配置，转换为 Node 直接可执行的指令结构
+	var appList []string
+	json.Unmarshal([]byte(spec.Apps), &appList)
+	var appConfigs map[string]string
+	json.Unmarshal([]byte(spec.AppConfigs), &appConfigs)
+
+	resolvedApps, _ := resolveAppCommands(appList, appConfigs, groupID)
+	resolvedAppsBytes, _ := json.Marshal(resolvedApps)
+
 	payloadMap := map[string]string{
-		"group_id":    groupID,
-		"tunnel":      spec.TunnelType,
-		"proxy_url":   proxyURL,
-		"apps":        spec.Apps,
-		"app_configs": spec.AppConfigs,
+		"group_id":      groupID,
+		"tunnel":        spec.TunnelType,
+		"proxy_url":     proxyURL,
+		"resolved_apps": string(resolvedAppsBytes),
+		"apps":          spec.Apps,
 	}
 	payloadBytes, _ := json.Marshal(payloadMap)
 
@@ -418,12 +438,21 @@ func migrateNode(c *gin.Context) {
 		}
 	}
 
+	// 解析应用清单和配置，转换为 Node 直接可执行的指令结构
+	var appListMigrate []string
+	json.Unmarshal([]byte(spec.Apps), &appListMigrate)
+	var appConfigsMigrate map[string]string
+	json.Unmarshal([]byte(spec.AppConfigs), &appConfigsMigrate)
+
+	resolvedAppsMigrate, _ := resolveAppCommands(appListMigrate, appConfigsMigrate, groupID)
+	resolvedAppsBytesMigrate, _ := json.Marshal(resolvedAppsMigrate)
+
 	startMap := map[string]string{
-		"group_id":    groupID,
-		"tunnel":      spec.TunnelType,
-		"proxy_url":   proxyURL,
-		"apps":        spec.Apps,
-		"app_configs": spec.AppConfigs,
+		"group_id":      groupID,
+		"tunnel":        spec.TunnelType,
+		"proxy_url":     proxyURL,
+		"resolved_apps": string(resolvedAppsBytesMigrate),
+		"apps":          spec.Apps,
 	}
 	startBytes, _ := json.Marshal(startMap)
 
@@ -461,6 +490,49 @@ func getAppTemplates(c *gin.Context) {
 	var apps []models.AppTemplate
 	models.DB.Find(&apps)
 	c.JSON(http.StatusOK, gin.H{"data": apps})
+}
+
+func addAppTemplate(c *gin.Context) {
+	var req struct {
+		Identifier       string `json:"identifier" binding:"required"`
+		DisplayName      string `json:"display_name" binding:"required"`
+		DefaultImage     string `json:"default_image" binding:"required"`
+		SupportedConfigs string `json:"supported_configs" binding:"required"`
+		CommandTemplate  string `json:"command_template" binding:"required"`
+		DriverType       string `json:"driver_type"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tmpl := models.AppTemplate{
+		ID:               uuid.New().String(),
+		Identifier:       req.Identifier,
+		DisplayName:      req.DisplayName,
+		DefaultImage:     req.DefaultImage,
+		SupportedConfigs: req.SupportedConfigs,
+		CommandTemplate:  req.CommandTemplate,
+		DriverType:       "docker",
+	}
+
+	if req.DriverType != "" {
+		tmpl.DriverType = req.DriverType
+	}
+
+	if err := models.DB.Create(&tmpl).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "应用模板标识符必须唯一"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "App Template created", "data": tmpl})
+}
+
+func deleteAppTemplate(c *gin.Context) {
+	id := c.Param("id")
+	models.DB.Where("id = ?", id).Delete(&models.AppTemplate{})
+	c.JSON(http.StatusOK, gin.H{"message": "App Template deleted"})
 }
 
 func getSystemInfo(c *gin.Context) {

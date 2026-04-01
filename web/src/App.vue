@@ -14,6 +14,10 @@
           <el-icon><SetUp /></el-icon>
           <span>代理组编排</span>
         </el-menu-item>
+        <el-menu-item index="/apps">
+          <el-icon><Menu /></el-icon>
+          <span>应用模板管理</span>
+        </el-menu-item>
         <el-menu-item index="/rules">
           <el-icon><Setting /></el-icon>
           <span>规则引擎</span>
@@ -38,7 +42,7 @@
 </template>
 
 <script setup>
-import { Monitor, Connection, SetUp, Setting, Document } from '@element-plus/icons-vue'
+import { Monitor, Connection, SetUp, Setting, Document, Menu } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()

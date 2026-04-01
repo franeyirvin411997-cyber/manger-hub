@@ -56,7 +56,8 @@ func seedAppTemplates() {
 			Identifier:       "traffmonetizer",
 			DisplayName:      "Traffmonetizer",
 			DefaultImage:     "traffmonetizer/cli_v2:latest",
-			SupportedConfigs: `{"token": "string"}`, // 用户输入 token
+			SupportedConfigs: `["token"]`,
+			CommandTemplate:  `["traffmonetizer/cli_v2:latest", "start", "accept", "--token", "{{token}}"]`,
 			DriverType:       "docker",
 		},
 		{
@@ -64,7 +65,8 @@ func seedAppTemplates() {
 			Identifier:       "repocket",
 			DisplayName:      "Repocket",
 			DefaultImage:     "repocket/repocket:latest",
-			SupportedConfigs: `{"email": "string", "api_key": "string"}`,
+			SupportedConfigs: `["email", "api_key"]`,
+			CommandTemplate:  `["-e", "RP_EMAIL={{email}}", "-e", "RP_API_KEY={{api_key}}", "repocket/repocket:latest"]`,
 			DriverType:       "docker",
 		},
 		{
@@ -72,7 +74,8 @@ func seedAppTemplates() {
 			Identifier:       "honeygain",
 			DisplayName:      "Honeygain",
 			DefaultImage:     "honeygain/honeygain:latest",
-			SupportedConfigs: `{"email": "string", "password": "string"}`,
+			SupportedConfigs: `["email", "password", "device"]`,
+			CommandTemplate:  `["honeygain/honeygain:latest", "-tou-accept", "-email", "{{email}}", "-pass", "{{password}}", "-device", "{{device}}"]`,
 			DriverType:       "docker",
 		},
 		{
@@ -80,7 +83,8 @@ func seedAppTemplates() {
 			Identifier:       "packetstream",
 			DisplayName:      "PacketStream",
 			DefaultImage:     "packetstream/psclient:latest",
-			SupportedConfigs: `{"cid": "string"}`,
+			SupportedConfigs: `["cid"]`,
+			CommandTemplate:  `["-e", "CID={{cid}}", "packetstream/psclient:latest"]`,
 			DriverType:       "docker",
 		},
 	}
@@ -89,6 +93,12 @@ func seedAppTemplates() {
 		var existing AppTemplate
 		if DB.Where("identifier = ?", t.Identifier).First(&existing).Error != nil {
 			DB.Create(&t)
+		} else if existing.CommandTemplate == "" {
+			// 兼容旧数据升级
+			DB.Model(&existing).Updates(map[string]interface{}{
+				"supported_configs": t.SupportedConfigs,
+				"command_template":  t.CommandTemplate,
+			})
 		}
 	}
 }

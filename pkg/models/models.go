@@ -95,7 +95,8 @@ type AppTemplate struct {
 	Identifier       string    `gorm:"uniqueIndex;type:varchar(64)" json:"identifier"` // 应用标识
 	DisplayName      string    `gorm:"type:varchar(128)" json:"display_name"`          // 展示名称
 	DefaultImage     string    `gorm:"type:varchar(256)" json:"default_image"`         // 默认镜像或运行源
-	SupportedConfigs string    `gorm:"type:text" json:"supported_configs"`             // 支持的配置项（JSON 定义）
+	SupportedConfigs string    `gorm:"type:text" json:"supported_configs"`             // 支持的配置项（JSON 数组，如 ["email", "password"]）
+	CommandTemplate  string    `gorm:"type:text" json:"command_template"`              // 启动命令模板（JSON 数组模板，如 ["-e", "EMAIL={{email}}", "image:latest"]）
 	DriverType       string    `gorm:"type:varchar(64)" json:"driver_type"`            // 运行驱动类型
 	RiskRules        string    `gorm:"type:text" json:"risk_rules"`                    // 日志风控默认规则
 	CreatedAt        time.Time `json:"created_at"`

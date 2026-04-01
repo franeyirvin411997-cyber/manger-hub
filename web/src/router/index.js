@@ -5,6 +5,7 @@ import GroupList from '../views/GroupList.vue'
 import RuleList from '../views/RuleList.vue'
 import Login from '../views/Login.vue'
 import OperationList from '../views/OperationList.vue'
+import AppTemplateList from '../views/AppTemplateList.vue'
 
 const routes = [
   {
@@ -38,6 +39,12 @@ const routes = [
     path: '/rules',
     name: 'Rules',
     component: RuleList,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/apps',
+    name: 'Apps',
+    component: AppTemplateList,
     meta: { requiresAuth: true }
   },
   {
