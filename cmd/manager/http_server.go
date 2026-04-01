@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -18,9 +20,18 @@ func SetupGinRouter() *gin.Engine {
 
 	r.Use(CorsMiddleware())
 
+	adminUser := os.Getenv("ADMIN_USER")
+	if adminUser == "" {
+		adminUser = "admin"
+	}
+	adminPassword := os.Getenv("ADMIN_PASSWORD")
+	if adminPassword == "" {
+		adminPassword = "admin"
+	}
+
 	// 统一的 Admin Basic Auth
 	adminGroup := r.Group("/api/v1", gin.BasicAuth(gin.Accounts{
-		"admin": "admin", // 固定 admin 账号密码 (符合首期单用户登录要求)
+		adminUser: adminPassword, // 从环境变量配置，默认为 admin:admin
 	}))
 
 	// 用于前端测试登录凭证是否正确
@@ -104,7 +115,7 @@ func addProxy(c *gin.Context) {
 		Username: req.Username,
 		Password: req.Password,
 		Protocol: req.Protocol,
-		PoolType: "formal",
+		PoolType: "observer",
 		Status:   "unknown",
 	}
 
@@ -151,7 +162,7 @@ func uploadProxiesCSV(c *gin.Context) {
 			Port:     port,
 			Username: "",
 			Password: "",
-			PoolType: "formal",
+			PoolType: "observer",
 			Status:   "unknown",
 		}
 		if len(record) >= 5 {
@@ -185,11 +196,11 @@ func createGroup(c *gin.Context) {
 
 	groupID := uuid.New().String()
 
-	// 查找一个未使用的在线代理 (简化逻辑，实际应检查 ProxyLease 表)
+	// 查找一个未使用的在线代理 (必须不为 in_use)
 	var proxy models.ProxyResource
-	if err := models.DB.Where("status = ?", "online").First(&proxy).Error; err != nil {
-		// 回退查找任何可用代理
-		if err := models.DB.First(&proxy).Error; err != nil {
+	if err := models.DB.Where("status = ? AND status != ?", "online", "in_use").First(&proxy).Error; err != nil {
+		// 回退查找任何状态未知或离线但未被占用的代理
+		if err := models.DB.Where("status != ?", "in_use").First(&proxy).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "No available proxies"})
 			return
 		}
@@ -237,12 +248,19 @@ func createGroup(c *gin.Context) {
 		Status:   "pending",
 	}
 
+	payloadMap := map[string]string{
+		"group_id":  groupID,
+		"tunnel":    req.TunnelType,
+		"proxy_url": proxyURL,
+	}
+	payloadBytes, _ := json.Marshal(payloadMap)
+
 	task := models.Task{
 		ID:          uuid.New().String(),
 		OperationID: op.ID,
 		NodeID:      req.NodeID,
 		Type:        "start_group",
-		Payload:     fmt.Sprintf(`{"group_id": "%s", "tunnel": "%s", "proxy_url": "%s"}`, groupID, req.TunnelType, proxyURL),
+		Payload:     string(payloadBytes),
 		Status:      "pending",
 		Timeout:     300,
 	}

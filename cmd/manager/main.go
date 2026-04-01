@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/grpc"
 	"multi_node_platform/pkg/models"
+	"multi_node_platform/pkg/workers"
 	pb "multi_node_platform/api/pb"
 )
 
@@ -16,6 +17,11 @@ func main() {
 	// 初始化数据库
 	dsn := models.GetDSNFromEnv()
 	models.InitDB(dsn)
+
+	// 启动后台工作协程
+	go workers.StartDriftChecker()
+	go workers.StartProxyLifecycleChecker()
+	go workers.StartRuleEngine()
 
 	// 启动 gRPC 服务用于与节点通信
 	go startGRPCServer(":50051")

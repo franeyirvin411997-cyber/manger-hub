@@ -3,6 +3,7 @@ module multi_node_platform
 go 1.25.0
 
 require (
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	google.golang.org/grpc v1.64.0
