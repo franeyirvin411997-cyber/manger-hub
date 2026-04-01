@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -14,9 +15,18 @@ var DB *gorm.DB
 // InitDB 初始化并连接 PostgreSQL 数据库
 func InitDB(dsn string) {
 	var err error
-	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		if err == nil {
+			break
+		}
+		log.Printf("无法连接到数据库 (重试 %d/%d): %v", i+1, maxRetries, err)
+		time.Sleep(3 * time.Second)
+	}
+
 	if err != nil {
-		log.Fatalf("无法连接到数据库: %v", err)
+		log.Fatalf("无法连接到数据库，已达到最大重试次数: %v", err)
 	}
 
 	// 自动迁移模式，确保数据表结构与模型定义一致
