@@ -4,6 +4,7 @@ import ProxyList from '../views/ProxyList.vue'
 import GroupList from '../views/GroupList.vue'
 import RuleList from '../views/RuleList.vue'
 import Login from '../views/Login.vue'
+import OperationList from '../views/OperationList.vue'
 
 const routes = [
   {
@@ -37,6 +38,12 @@ const routes = [
     path: '/rules',
     name: 'Rules',
     component: RuleList,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/operations',
+    name: 'Operations',
+    component: OperationList,
     meta: { requiresAuth: true }
   }
 ]

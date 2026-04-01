@@ -112,6 +112,51 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 			resultStatus = "failed"
 			errMsg = "Invalid payload format"
 		}
+	} else if task.Type == "stop_group" {
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
+			groupID := payload["group_id"]
+
+			// 停止并删除容器
+			appContainerName := fmt.Sprintf("app-%s", groupID)
+			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
+
+			exec.Command("docker", "rm", "-f", appContainerName).Run()
+			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+		}
+	} else if task.Type == "replace_proxy" {
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
+			groupID := payload["group_id"]
+			proxyURL := payload["proxy_url"]
+
+			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
+			appContainerName := fmt.Sprintf("app-%s", groupID)
+
+			// 对于隧道容器，最简单的替换方式是删掉重建，App容器也需要跟着重启以重连网络
+			exec.Command("docker", "rm", "-f", appContainerName).Run()
+			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+
+			gostCmd := exec.Command("docker", "run", "-d", "--name", gostContainerName, "ginuerzh/gost", "-L", ":1080", "-F", proxyURL)
+			if err := gostCmd.Run(); err != nil {
+				resultStatus = "failed"
+				errMsg = fmt.Sprintf("Failed to restart gost tunnel: %v", err)
+			} else {
+				appCmd := exec.Command("docker", "run", "-d", "--name", appContainerName,
+					"--network", fmt.Sprintf("container:%s", gostContainerName),
+					"-e", "http_proxy=http://127.0.0.1:1080",
+					"-e", "https_proxy=http://127.0.0.1:1080",
+					"-e", "all_proxy=socks5://127.0.0.1:1080",
+					"alpine", "sleep", "3600")
+				if err := appCmd.Run(); err != nil {
+					resultStatus = "failed"
+					errMsg = fmt.Sprintf("Failed to restart app container: %v", err)
+				}
+			}
+		} else {
+			resultStatus = "failed"
+			errMsg = "Invalid payload format"
+		}
 	} else {
 		resultStatus = "failed"
 		errMsg = "Unknown task type"

@@ -18,6 +18,10 @@
           <el-icon><Setting /></el-icon>
           <span>规则引擎</span>
         </el-menu-item>
+        <el-menu-item index="/operations">
+          <el-icon><Document /></el-icon>
+          <span>操作审计</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -34,7 +38,7 @@
 </template>
 
 <script setup>
-import { Monitor, Connection, SetUp, Setting } from '@element-plus/icons-vue'
+import { Monitor, Connection, SetUp, Setting, Document } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
