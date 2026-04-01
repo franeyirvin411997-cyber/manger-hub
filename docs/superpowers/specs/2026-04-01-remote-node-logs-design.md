@@ -37,13 +37,13 @@
 
 采用反向推流中转架构：
 
-`Browser -> Manager SSE -> Manager Subscription -> Node Heartbeat/Stream -> Manager`
+`Browser -> Manager text/event-stream (authenticated fetch) -> Manager Subscription -> Node LogStream -> Manager`
 
 核心思路：
 
-1. 前端打开日志弹窗并向 manager 发起一个受鉴权保护的 SSE 请求。
+1. 前端打开日志弹窗并通过带认证头的 `fetch` 向 manager 发起一个受鉴权保护的 `text/event-stream` 请求。
 2. manager 校验当前登录态、节点状态、日志源类型与参数合法性。
-3. manager 为目标节点登记一个临时日志订阅，并为浏览器保持 SSE 输出通道。
+3. manager 为目标节点登记一个临时日志订阅，并为浏览器保持流式输出通道。
 4. node 在既有的 `node -> manager` 连接方向上，通过新增的双向流式 gRPC 通道或在心跳扩展流中获取待执行日志订阅。
 5. node 根据白名单日志源类型在本机执行固定日志命令：
    - 节点服务日志：`journalctl`
@@ -51,7 +51,7 @@
 6. node 先启动实时日志流，实时连接建立后先向 manager 回传 `live_connected` 状态。
 7. node 再异步抓取最近 200 行历史日志并以 `history` 类型回传。
 8. node 持续回传实时日志行给 manager。
-9. manager 将 node 回传的日志块转换为 SSE 事件转发给前端。
+9. manager 将 node 回传的日志块转换为 `text/event-stream` 事件转发给前端。
 10. 前端将实时日志和历史日志分开渲染，支持停止与重连。
 
 ## 日志源模型
@@ -81,7 +81,7 @@
 
 ## 前端到 manager 接口
 
-新增 SSE 接口：
+新增日志流接口：
 
 `GET /api/v1/nodes/:id/logs/stream?source_type=node_service&container_name=...`
 
@@ -103,7 +103,13 @@
 
 ### 响应格式
 
-使用 `text/event-stream`。
+manager 响应格式使用 `text/event-stream`。
+
+前端实现约束：
+
+- 不能直接使用浏览器原生 `EventSource`
+- 必须使用带认证头的 `fetch`
+- 前端自行解析 `text/event-stream` 事件帧
 
 事件类型固定为：
 
@@ -146,7 +152,7 @@ manager 在建立日志流前必须完成这些校验：
    - `container_name` 非空
    - `container_name` 通过白名单前缀校验
 
-若校验失败，SSE 直接返回错误并结束。
+若校验失败，日志流直接返回错误并结束。
 
 ## manager 与 node 协议
 
@@ -180,6 +186,9 @@ rpc LogStream(stream LogEnvelope) returns (stream LogEnvelope);
 
 ### message_type 语义
 
+- `stream_open`
+  - node 发给 manager
+  - 表示日志双向流已建立，并携带 `node_id/token` 供 manager 绑定该流
 - `subscribe_request`
   - manager 发给 node
   - 表示创建日志订阅
@@ -202,9 +211,10 @@ rpc LogStream(stream LogEnvelope) returns (stream LogEnvelope);
 ### 连接模型
 
 - node 启动后建立一条长期存在的 `LogStream` 双向流，与其既有注册/心跳逻辑并存。
+- node 建流成功后，第一条消息必须发送 `stream_open`。
 - manager 侧为每个在线 node 维护一个活动日志会话表。
 - 当前端请求某节点日志时，manager 将一个 `subscribe_request` 写入该 node 的日志流。
-- 当前端关闭 SSE 或点击停止时，manager 向 node 发送 `subscribe_cancel`。
+- 当前端关闭 fetch 日志流或点击停止时，manager 向 node 发送 `subscribe_cancel`。
 - node 收到订阅后启动本地日志命令并持续回传日志块。
 
 ## node 端执行模型
@@ -261,7 +271,7 @@ docker logs --tail 200 <container_name>
 
 必须处理这些退出路径：
 
-- 浏览器关闭 SSE 连接
+- 浏览器关闭 fetch 日志流连接
 - manager 发送 `subscribe_cancel`
 - 日志双向流断开
 - node 本地命令退出
@@ -282,13 +292,13 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 - `source_type`
 - `container_name`
 - `created_at`
-- `sse_writer`
+- `response_writer`
 - `done_channel`
 
 约束：
 
-- 一个 SSE 请求对应一个订阅
-- SSE 结束时必须清理该订阅
+- 一个日志流请求对应一个订阅
+- 日志流结束时必须清理该订阅
 - node 侧日志回传时，manager 按 `subscription_id` 找到目标浏览器连接
 
 ## 安全要求
@@ -367,7 +377,7 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 - 打开弹窗后默认不自动开始，用户点击 `开始` 建立连接。
 - 若日志源为 `node_service`，无需容器名。
 - 若日志源为 `container`，容器名为空时禁用开始按钮。
-- 点击 `停止` 时关闭当前 SSE 连接。
+- 点击 `停止` 时关闭当前 fetch 日志流连接。
 - 点击 `清空` 时清空实时区与历史区内容，但不自动断开连接。
 - 点击 `重新连接` 时先断开旧流，再重新建立新流。
 
@@ -396,7 +406,7 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 
 处理方式：
 
-- SSE 发送 `error` 事件
+- manager 发送 `error` 事件
 - 随后关闭连接
 
 ### node 层错误
@@ -414,7 +424,7 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 
 ### 前端错误
 
-- SSE 连接断开
+- fetch 日志流连接断开
 - 网络错误
 - manager 返回 error 事件
 
@@ -428,13 +438,13 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 
 ### manager 测试
 
-- SSE 参数校验：
+- 日志流参数校验：
   - 非法 `source_type`
   - 容器日志缺失 `container_name`
   - 非白名单容器名
 - 节点离线时拒绝建立日志流
 - manager 能正确登记、查找、清理日志订阅
-- manager 能正确把 node 返回的 `live/history/status/error` 转成 SSE 事件
+- manager 能正确把 node 返回的 `live/history/status/error` 转成流事件
 
 ### node 测试
 
@@ -465,7 +475,7 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 
 预计新增：
 
-- manager 侧日志订阅 / SSE / 流分发处理文件
+- manager 侧日志订阅 / 流输出 / 分发处理文件
 - node 侧日志执行 / 白名单 / 双向流处理文件
 - 对应测试文件
 
@@ -473,7 +483,7 @@ manager 需要为每个打开的日志窗口维护一个内存态订阅对象，
 
 - `journalctl` 依赖远端系统为 `systemd` 环境。
 - 容器日志依赖远端机器已安装可用的 Docker CLI。
-- SSE 连接时长较长，需要确认 nginx/代理层超时配置不会过早切断连接。
+- `text/event-stream` 连接时长较长，需要确认 nginx/代理层超时配置不会过早切断连接。
 - 每个在线 node 会额外维持一条长期日志双向流，必须确保断线重连逻辑可靠。
 - 实时日志会持续占用 manager 与 node 之间的会话资源，必须确保订阅关闭后资源释放。
 - 历史日志与实时日志分区展示是设计要求，不能混排，否则“先实时、后历史”的顺序会破坏时间线理解。
