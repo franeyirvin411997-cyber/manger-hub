@@ -46,6 +46,51 @@ func InitDB(dsn string) {
 	}
 
 	fmt.Println("数据库初始化成功，并已完成自动迁移。")
+	seedAppTemplates()
+}
+
+func seedAppTemplates() {
+	templates := []AppTemplate{
+		{
+			ID:               "app-traffmonetizer",
+			Identifier:       "traffmonetizer",
+			DisplayName:      "Traffmonetizer",
+			DefaultImage:     "traffmonetizer/cli_v2:latest",
+			SupportedConfigs: `{"token": "string"}`, // 用户输入 token
+			DriverType:       "docker",
+		},
+		{
+			ID:               "app-repocket",
+			Identifier:       "repocket",
+			DisplayName:      "Repocket",
+			DefaultImage:     "repocket/repocket:latest",
+			SupportedConfigs: `{"email": "string", "api_key": "string"}`,
+			DriverType:       "docker",
+		},
+		{
+			ID:               "app-honeygain",
+			Identifier:       "honeygain",
+			DisplayName:      "Honeygain",
+			DefaultImage:     "honeygain/honeygain:latest",
+			SupportedConfigs: `{"email": "string", "password": "string"}`,
+			DriverType:       "docker",
+		},
+		{
+			ID:               "app-packetstream",
+			Identifier:       "packetstream",
+			DisplayName:      "PacketStream",
+			DefaultImage:     "packetstream/psclient:latest",
+			SupportedConfigs: `{"cid": "string"}`,
+			DriverType:       "docker",
+		},
+	}
+
+	for _, t := range templates {
+		var existing AppTemplate
+		if DB.Where("identifier = ?", t.Identifier).First(&existing).Error != nil {
+			DB.Create(&t)
+		}
+	}
 }
 
 // GetDSNFromEnv 从环境变量中获取数据库连接字符串

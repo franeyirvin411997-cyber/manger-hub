@@ -83,10 +83,15 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 	var resultJson = "{}"
 
 	if task.Type == "start_group" {
-		var payload map[string]string
+		var payload struct {
+			GroupID  string `json:"group_id"`
+			ProxyURL string `json:"proxy_url"`
+			Apps     string `json:"apps"` // JSON array of app identifiers
+			AppConfigs string `json:"app_configs"` // JSON map of configs
+		}
 		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
-			groupID := payload["group_id"]
-			proxyURL := payload["proxy_url"] // 例如: socks5://ip:port
+			groupID := payload.GroupID
+			proxyURL := payload.ProxyURL
 
 			// 1. 启动 Gost 容器作为本地隧道
 			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
@@ -95,17 +100,60 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 				resultStatus = "failed"
 				errMsg = fmt.Sprintf("Failed to start gost tunnel: %v", err)
 			} else {
-				// 2. 启动 App 容器，共享 Gost 容器的网络命名空间，并注入代理环境变量
-				appContainerName := fmt.Sprintf("app-%s", groupID)
-				appCmd := exec.Command("docker", "run", "-d", "--name", appContainerName,
-					"--network", fmt.Sprintf("container:%s", gostContainerName),
-					"-e", "http_proxy=http://127.0.0.1:1080",
-					"-e", "https_proxy=http://127.0.0.1:1080",
-					"-e", "all_proxy=socks5://127.0.0.1:1080",
-					"alpine", "sleep", "3600")
-				if err := appCmd.Run(); err != nil {
-					resultStatus = "failed"
-					errMsg = fmt.Sprintf("Failed to start app container: %v", err)
+				// 解析应用清单
+				var appList []string
+				if payload.Apps != "" && payload.Apps != "[]" {
+					json.Unmarshal([]byte(payload.Apps), &appList)
+				} else {
+					// 默认后备用于旧数据兼容
+					appList = []string{"alpine"}
+				}
+
+				var appConfigs map[string]string
+				if payload.AppConfigs != "" {
+					json.Unmarshal([]byte(payload.AppConfigs), &appConfigs)
+				} else {
+					appConfigs = make(map[string]string)
+				}
+
+				// 2. 为每个选中的 App 启动一个容器，共享 Gost 容器的网络
+				for _, appIdentifier := range appList {
+					appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
+
+					var appCmd *exec.Cmd
+					baseArgs := []string{
+						"run", "-d", "--name", appContainerName,
+						"--network", fmt.Sprintf("container:%s", gostContainerName),
+						"-e", "http_proxy=http://127.0.0.1:1080",
+						"-e", "https_proxy=http://127.0.0.1:1080",
+						"-e", "all_proxy=socks5://127.0.0.1:1080",
+					}
+
+					// 根据应用类型适配启动参数 (可根据实际 Docker 镜像参数调整)
+					switch appIdentifier {
+					case "traffmonetizer":
+						token := appConfigs["traffmonetizer_token"]
+						baseArgs = append(baseArgs, "traffmonetizer/cli_v2:latest", "start", "accept", "--token", token)
+					case "repocket":
+						email := appConfigs["repocket_email"]
+						apiKey := appConfigs["repocket_api_key"]
+						baseArgs = append(baseArgs, "-e", fmt.Sprintf("RP_EMAIL=%s", email), "-e", fmt.Sprintf("RP_API_KEY=%s", apiKey), "repocket/repocket:latest")
+					case "honeygain":
+						email := appConfigs["honeygain_email"]
+						password := appConfigs["honeygain_password"]
+						baseArgs = append(baseArgs, "honeygain/honeygain:latest", "-tou-accept", "-email", email, "-pass", password, "-device", groupID)
+					case "packetstream":
+						cid := appConfigs["packetstream_cid"]
+						baseArgs = append(baseArgs, "-e", fmt.Sprintf("CID=%s", cid), "packetstream/psclient:latest")
+					default: // 默认 alpine (测试用)
+						baseArgs = append(baseArgs, "alpine", "sleep", "3600")
+					}
+
+					appCmd = exec.Command("docker", baseArgs...)
+					if err := appCmd.Run(); err != nil {
+						resultStatus = "failed"
+						errMsg += fmt.Sprintf("Failed to start %s container: %v; ", appIdentifier, err)
+					}
 				}
 			}
 		} else {
@@ -113,44 +161,108 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 			errMsg = "Invalid payload format"
 		}
 	} else if task.Type == "stop_group" {
-		var payload map[string]string
+		var payload struct {
+			GroupID string `json:"group_id"`
+			Apps    string `json:"apps"`
+		}
 		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
-			groupID := payload["group_id"]
+			groupID := payload.GroupID
 
-			// 停止并删除容器
-			appContainerName := fmt.Sprintf("app-%s", groupID)
+			// 找出可能启动过的应用容器名字并删除
+			var appList []string
+			if payload.Apps != "" && payload.Apps != "[]" {
+				json.Unmarshal([]byte(payload.Apps), &appList)
+			} else {
+				appList = []string{"alpine"}
+			}
+
+			for _, appIdentifier := range appList {
+				appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
+				exec.Command("docker", "rm", "-f", appContainerName).Run()
+			}
+
 			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
-
-			exec.Command("docker", "rm", "-f", appContainerName).Run()
 			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+
+			// 清理遗留容器（兼容以前单一app命名的容器）
+			exec.Command("docker", "rm", "-f", fmt.Sprintf("app-%s", groupID)).Run()
 		}
 	} else if task.Type == "replace_proxy" {
-		var payload map[string]string
+		var payload struct {
+			GroupID    string `json:"group_id"`
+			ProxyURL   string `json:"proxy_url"`
+			Apps       string `json:"apps"`
+			AppConfigs string `json:"app_configs"`
+		}
 		if err := json.Unmarshal([]byte(task.PayloadJson), &payload); err == nil {
-			groupID := payload["group_id"]
-			proxyURL := payload["proxy_url"]
+			groupID := payload.GroupID
+			proxyURL := payload.ProxyURL
 
+			// 解析应用清单
+			var appList []string
+			if payload.Apps != "" && payload.Apps != "[]" {
+				json.Unmarshal([]byte(payload.Apps), &appList)
+			} else {
+				appList = []string{"alpine"}
+			}
+
+			var appConfigs map[string]string
+			if payload.AppConfigs != "" {
+				json.Unmarshal([]byte(payload.AppConfigs), &appConfigs)
+			} else {
+				appConfigs = make(map[string]string)
+			}
+
+			// 停止旧容器
 			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
-			appContainerName := fmt.Sprintf("app-%s", groupID)
-
-			// 对于隧道容器，最简单的替换方式是删掉重建，App容器也需要跟着重启以重连网络
-			exec.Command("docker", "rm", "-f", appContainerName).Run()
 			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+			exec.Command("docker", "rm", "-f", fmt.Sprintf("app-%s", groupID)).Run() // 遗留清理
+			for _, appIdentifier := range appList {
+				appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
+				exec.Command("docker", "rm", "-f", appContainerName).Run()
+			}
 
 			gostCmd := exec.Command("docker", "run", "-d", "--name", gostContainerName, "ginuerzh/gost", "-L", ":1080", "-F", proxyURL)
 			if err := gostCmd.Run(); err != nil {
 				resultStatus = "failed"
 				errMsg = fmt.Sprintf("Failed to restart gost tunnel: %v", err)
 			} else {
-				appCmd := exec.Command("docker", "run", "-d", "--name", appContainerName,
-					"--network", fmt.Sprintf("container:%s", gostContainerName),
-					"-e", "http_proxy=http://127.0.0.1:1080",
-					"-e", "https_proxy=http://127.0.0.1:1080",
-					"-e", "all_proxy=socks5://127.0.0.1:1080",
-					"alpine", "sleep", "3600")
-				if err := appCmd.Run(); err != nil {
-					resultStatus = "failed"
-					errMsg = fmt.Sprintf("Failed to restart app container: %v", err)
+				// 重启选中的应用
+				for _, appIdentifier := range appList {
+					appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
+					var appCmd *exec.Cmd
+					baseArgs := []string{
+						"run", "-d", "--name", appContainerName,
+						"--network", fmt.Sprintf("container:%s", gostContainerName),
+						"-e", "http_proxy=http://127.0.0.1:1080",
+						"-e", "https_proxy=http://127.0.0.1:1080",
+						"-e", "all_proxy=socks5://127.0.0.1:1080",
+					}
+
+					switch appIdentifier {
+					case "traffmonetizer":
+						token := appConfigs["traffmonetizer_token"]
+						baseArgs = append(baseArgs, "traffmonetizer/cli_v2:latest", "start", "accept", "--token", token)
+					case "repocket":
+						email := appConfigs["repocket_email"]
+						apiKey := appConfigs["repocket_api_key"]
+						baseArgs = append(baseArgs, "-e", fmt.Sprintf("RP_EMAIL=%s", email), "-e", fmt.Sprintf("RP_API_KEY=%s", apiKey), "repocket/repocket:latest")
+					case "honeygain":
+						email := appConfigs["honeygain_email"]
+						password := appConfigs["honeygain_password"]
+						baseArgs = append(baseArgs, "honeygain/honeygain:latest", "-tou-accept", "-email", email, "-pass", password, "-device", groupID)
+					case "packetstream":
+						cid := appConfigs["packetstream_cid"]
+						baseArgs = append(baseArgs, "-e", fmt.Sprintf("CID=%s", cid), "packetstream/psclient:latest")
+					default:
+						baseArgs = append(baseArgs, "alpine", "sleep", "3600")
+					}
+
+					appCmd = exec.Command("docker", baseArgs...)
+					if err := appCmd.Run(); err != nil {
+						resultStatus = "failed"
+						errMsg += fmt.Sprintf("Failed to restart %s container: %v; ", appIdentifier, err)
+					}
 				}
 			}
 		} else {

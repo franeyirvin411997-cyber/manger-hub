@@ -17,18 +17,53 @@
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialogVisible" title="创建代理组" width="30%">
-      <el-form :model="form" label-width="100px">
+    <el-dialog v-model="dialogVisible" title="创建代理组" width="50%">
+      <el-form :model="form" label-width="120px">
         <el-form-item label="部署节点">
-          <el-select v-model="form.node_id" placeholder="请选择节点">
+          <el-select v-model="form.node_id" placeholder="请选择节点" style="width: 100%;">
             <el-option v-for="node in nodes" :key="node.id" :label="node.display_name" :value="node.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="隧道类型">
-          <el-select v-model="form.tunnel_type">
+          <el-select v-model="form.tunnel_type" style="width: 100%;">
             <el-option label="gost" value="gost" />
           </el-select>
         </el-form-item>
+        <el-form-item label="选择应用">
+          <el-select v-model="selectedApps" multiple placeholder="请选择应用模板" style="width: 100%;">
+            <el-option v-for="app in appTemplates" :key="app.identifier" :label="app.display_name" :value="app.identifier" />
+          </el-select>
+        </el-form-item>
+
+        <div v-for="appId in selectedApps" :key="appId" style="margin-left: 20px; border-left: 2px solid #409EFF; padding-left: 10px;">
+          <h4>{{ getAppName(appId) }} 配置</h4>
+          <!-- traffmonetizer -->
+          <el-form-item label="Token" v-if="appId === 'traffmonetizer'">
+            <el-input v-model="appConfigs['traffmonetizer_token']" placeholder="Traffmonetizer Token"></el-input>
+          </el-form-item>
+
+          <!-- repocket -->
+          <el-form-item label="Email" v-if="appId === 'repocket'">
+            <el-input v-model="appConfigs['repocket_email']" placeholder="Repocket Email"></el-input>
+          </el-form-item>
+          <el-form-item label="API Key" v-if="appId === 'repocket'">
+            <el-input v-model="appConfigs['repocket_api_key']" placeholder="Repocket API Key"></el-input>
+          </el-form-item>
+
+          <!-- honeygain -->
+          <el-form-item label="Email" v-if="appId === 'honeygain'">
+            <el-input v-model="appConfigs['honeygain_email']" placeholder="Honeygain Email"></el-input>
+          </el-form-item>
+          <el-form-item label="Password" v-if="appId === 'honeygain'">
+            <el-input type="password" v-model="appConfigs['honeygain_password']" placeholder="Honeygain Password"></el-input>
+          </el-form-item>
+
+          <!-- packetstream -->
+          <el-form-item label="CID" v-if="appId === 'packetstream'">
+            <el-input v-model="appConfigs['packetstream_cid']" placeholder="PacketStream CID"></el-input>
+          </el-form-item>
+        </div>
+
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -63,11 +98,17 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const groups = ref([])
 const nodes = ref([])
+const appTemplates = ref([])
 const dialogVisible = ref(false)
+
+const selectedApps = ref([])
+const appConfigs = ref({})
+
 const form = ref({
   node_id: '',
   tunnel_type: 'gost',
-  apps: '[]'
+  apps: '[]',
+  app_configs: '{}'
 })
 
 const migrateDialogVisible = ref(false)
@@ -83,6 +124,9 @@ const fetchData = async () => {
 
     const resNodes = await axios.get('/api/v1/nodes')
     nodes.value = resNodes.data.data || []
+
+    const resApps = await axios.get('/api/v1/apps')
+    appTemplates.value = resApps.data.data || []
   } catch (e) {
     ElMessage.error('数据加载失败')
   }
@@ -92,8 +136,15 @@ onMounted(() => {
   fetchData()
 })
 
+const getAppName = (id) => {
+  const tmpl = appTemplates.value.find(t => t.identifier === id)
+  return tmpl ? tmpl.display_name : id
+}
+
 const submitForm = async () => {
   try {
+    form.value.apps = JSON.stringify(selectedApps.value)
+    form.value.app_configs = JSON.stringify(appConfigs.value)
     await axios.post('/api/v1/groups', form.value)
     ElMessage.success('创建指令已下发')
     dialogVisible.value = false

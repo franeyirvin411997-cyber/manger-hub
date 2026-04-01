@@ -54,6 +54,9 @@ func SetupGinRouter() *gin.Engine {
 		adminGroup.POST("/groups/:id/replace_proxy", replaceProxy)
 		adminGroup.POST("/groups/:id/migrate_node", migrateNode)
 
+		// 应用模板
+		adminGroup.GET("/apps", getAppTemplates)
+
 		// 操作审计
 		adminGroup.GET("/operations", getOperations)
 		adminGroup.GET("/tasks", getTasks)
@@ -192,7 +195,8 @@ func createGroup(c *gin.Context) {
 	var req struct {
 		NodeID     string `json:"node_id" binding:"required"`
 		TunnelType string `json:"tunnel_type"`
-		Apps       string `json:"apps"` // JSON
+		Apps       string `json:"apps"`        // JSON array of app ids
+		AppConfigs string `json:"app_configs"` // JSON map of app configs
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -239,6 +243,7 @@ func createGroup(c *gin.Context) {
 		ProxyLeaseID: lease.ID,
 		TunnelType:   req.TunnelType,
 		Apps:         req.Apps,
+		AppConfigs:   req.AppConfigs,
 	}
 
 	runtime := models.GroupRuntime{
@@ -255,9 +260,11 @@ func createGroup(c *gin.Context) {
 	}
 
 	payloadMap := map[string]string{
-		"group_id":  groupID,
-		"tunnel":    req.TunnelType,
-		"proxy_url": proxyURL,
+		"group_id":    groupID,
+		"tunnel":      req.TunnelType,
+		"proxy_url":   proxyURL,
+		"apps":        req.Apps,
+		"app_configs": req.AppConfigs,
 	}
 	payloadBytes, _ := json.Marshal(payloadMap)
 
@@ -330,9 +337,11 @@ func replaceProxy(c *gin.Context) {
 	}
 
 	payloadMap := map[string]string{
-		"group_id":  groupID,
-		"tunnel":    spec.TunnelType,
-		"proxy_url": proxyURL,
+		"group_id":    groupID,
+		"tunnel":      spec.TunnelType,
+		"proxy_url":   proxyURL,
+		"apps":        spec.Apps,
+		"app_configs": spec.AppConfigs,
 	}
 	payloadBytes, _ := json.Marshal(payloadMap)
 
@@ -382,7 +391,7 @@ func migrateNode(c *gin.Context) {
 
 	// 先在旧节点发起停止，然后在目标节点发起启动 (简单起见我们把任务发给这两个节点，后端依靠状态机后续同步)
 	// 在 Node 执行端我们会实现 stop_group
-	payloadMap := map[string]string{"group_id": groupID}
+	payloadMap := map[string]string{"group_id": groupID, "apps": spec.Apps}
 	stopBytes, _ := json.Marshal(payloadMap)
 
 	taskStop := models.Task{
@@ -410,9 +419,11 @@ func migrateNode(c *gin.Context) {
 	}
 
 	startMap := map[string]string{
-		"group_id":  groupID,
-		"tunnel":    spec.TunnelType,
-		"proxy_url": proxyURL,
+		"group_id":    groupID,
+		"tunnel":      spec.TunnelType,
+		"proxy_url":   proxyURL,
+		"apps":        spec.Apps,
+		"app_configs": spec.AppConfigs,
 	}
 	startBytes, _ := json.Marshal(startMap)
 
@@ -444,6 +455,12 @@ func getTasks(c *gin.Context) {
 	var tasks []models.Task
 	models.DB.Order("created_at desc").Limit(200).Find(&tasks)
 	c.JSON(http.StatusOK, gin.H{"data": tasks})
+}
+
+func getAppTemplates(c *gin.Context) {
+	var apps []models.AppTemplate
+	models.DB.Find(&apps)
+	c.JSON(http.StatusOK, gin.H{"data": apps})
 }
 
 func getSystemInfo(c *gin.Context) {
