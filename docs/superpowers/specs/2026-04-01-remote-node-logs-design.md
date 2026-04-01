@@ -35,23 +35,24 @@
 
 ## 总体方案
 
-采用单向中转架构：
+采用反向推流中转架构：
 
-`Browser -> Manager SSE -> Manager gRPC Stream -> Node`
+`Browser -> Manager SSE -> Manager Subscription -> Node Heartbeat/Stream -> Manager`
 
 核心思路：
 
 1. 前端打开日志弹窗并向 manager 发起一个受鉴权保护的 SSE 请求。
 2. manager 校验当前登录态、节点状态、日志源类型与参数合法性。
-3. manager 使用数据库中保存的正式 node token 向目标 node 建立 gRPC 流式日志请求。
-4. node 根据白名单日志源类型在本机执行固定日志命令：
+3. manager 为目标节点登记一个临时日志订阅，并为浏览器保持 SSE 输出通道。
+4. node 在既有的 `node -> manager` 连接方向上，通过新增的双向流式 gRPC 通道或在心跳扩展流中获取待执行日志订阅。
+5. node 根据白名单日志源类型在本机执行固定日志命令：
    - 节点服务日志：`journalctl`
    - 容器日志：`docker logs`
-5. node 先启动实时日志流，实时连接建立后先向 manager 回传 `live_connected` 状态。
-6. node 再异步抓取最近 200 行历史日志并以 `history` 类型回传。
-7. node 持续回传实时日志行给 manager。
-8. manager 将 gRPC 日志块转换为 SSE 事件转发给前端。
-9. 前端将实时日志和历史日志分开渲染，支持停止与重连。
+6. node 先启动实时日志流，实时连接建立后先向 manager 回传 `live_connected` 状态。
+7. node 再异步抓取最近 200 行历史日志并以 `history` 类型回传。
+8. node 持续回传实时日志行给 manager。
+9. manager 将 node 回传的日志块转换为 SSE 事件转发给前端。
+10. 前端将实时日志和历史日志分开渲染，支持停止与重连。
 
 ## 日志源模型
 
@@ -147,52 +148,68 @@ manager 在建立日志流前必须完成这些校验：
 
 若校验失败，SSE 直接返回错误并结束。
 
-## manager 到 node 协议
+## manager 与 node 协议
 
-在 `api/proto/platform.proto` 中新增流式 RPC：
+日志链路必须沿用当前系统的既有连接方向，即 `node -> manager`。manager 不能主动连接 node，因为当前架构中：
+
+- node 是 gRPC client，主动连 manager
+- manager 是 gRPC server
+- 节点侧未暴露可供 manager 主动访问的服务端口
+
+因此日志功能不能设计成 `manager -> node` 主动拉取，而必须设计成“manager 登记订阅，node 主动获取并回推日志”。
+
+在 `api/proto/platform.proto` 中新增一个双向流式 RPC：
 
 ```proto
-rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+rpc LogStream(stream LogEnvelope) returns (stream LogEnvelope);
 ```
 
-### StreamLogsRequest
+### LogEnvelope
 
-字段设计：
+一个统一消息体，包含：
 
+- `message_type`
+- `subscription_id`
 - `node_id`
 - `token`
 - `source_type`
 - `container_name`
-
-语义：
-
-- `node_id`
-  - manager 请求的目标 node id
-- `token`
-  - manager 从数据库读取的正式 node token
-- `source_type`
-  - `node_service` / `container`
-- `container_name`
-  - 仅容器日志时使用
-
-### LogChunk
-
-字段设计：
-
 - `stream_type`
 - `content`
 - `timestamp`
 
-`stream_type` 枚举语义：
+### message_type 语义
 
+- `subscribe_request`
+  - manager 发给 node
+  - 表示创建日志订阅
+- `subscribe_cancel`
+  - manager 发给 node
+  - 表示取消日志订阅
 - `status`
-- `live`
+  - node 发给 manager
+  - 如 `connecting`、`live_connected`、`stream_closed`
 - `history`
+  - node 发给 manager
+  - 最近 200 行历史日志
+- `live`
+  - node 发给 manager
+  - 实时日志
 - `error`
+  - node 发给 manager
+  - 参数非法、执行失败、容器不存在等
+
+### 连接模型
+
+- node 启动后建立一条长期存在的 `LogStream` 双向流，与其既有注册/心跳逻辑并存。
+- manager 侧为每个在线 node 维护一个活动日志会话表。
+- 当前端请求某节点日志时，manager 将一个 `subscribe_request` 写入该 node 的日志流。
+- 当前端关闭 SSE 或点击停止时，manager 向 node 发送 `subscribe_cancel`。
+- node 收到订阅后启动本地日志命令并持续回传日志块。
 
 ## node 端执行模型
 
-node 收到 `StreamLogs` 请求后，按日志源类型执行白名单命令。
+node 收到 `subscribe_request` 后，按日志源类型执行白名单命令。
 
 ### 节点服务日志命令
 
@@ -245,7 +262,8 @@ docker logs --tail 200 <container_name>
 必须处理这些退出路径：
 
 - 浏览器关闭 SSE 连接
-- manager 中断 gRPC 流
+- manager 发送 `subscribe_cancel`
+- 日志双向流断开
 - node 本地命令退出
 - 参数校验失败
 - 节点内部错误
@@ -255,6 +273,24 @@ docker logs --tail 200 <container_name>
 - 终止对应实时子进程
 - 释放相关 goroutine / pipe 读取器
 
+## manager 订阅状态
+
+manager 需要为每个打开的日志窗口维护一个内存态订阅对象，至少包含：
+
+- `subscription_id`
+- `node_id`
+- `source_type`
+- `container_name`
+- `created_at`
+- `sse_writer`
+- `done_channel`
+
+约束：
+
+- 一个 SSE 请求对应一个订阅
+- SSE 结束时必须清理该订阅
+- node 侧日志回传时，manager 按 `subscription_id` 找到目标浏览器连接
+
 ## 安全要求
 
 ### manager 侧
@@ -262,6 +298,7 @@ docker logs --tail 200 <container_name>
 - 只允许后台已认证用户查看日志。
 - 不允许将日志查看接口暴露为匿名接口。
 - 不允许透传任意命令到 node。
+- manager 只能向已在线且已建立日志流连接的 node 下发日志订阅。
 
 ### node 侧
 
@@ -396,6 +433,7 @@ docker logs --tail 200 <container_name>
   - 容器日志缺失 `container_name`
   - 非白名单容器名
 - 节点离线时拒绝建立日志流
+- manager 能正确登记、查找、清理日志订阅
 - manager 能正确把 node 返回的 `live/history/status/error` 转成 SSE 事件
 
 ### node 测试
@@ -427,8 +465,8 @@ docker logs --tail 200 <container_name>
 
 预计新增：
 
-- manager 侧日志流 HTTP / gRPC 处理文件
-- node 侧日志执行与白名单处理文件
+- manager 侧日志订阅 / SSE / 流分发处理文件
+- node 侧日志执行 / 白名单 / 双向流处理文件
 - 对应测试文件
 
 ## 风险与注意事项
@@ -436,5 +474,6 @@ docker logs --tail 200 <container_name>
 - `journalctl` 依赖远端系统为 `systemd` 环境。
 - 容器日志依赖远端机器已安装可用的 Docker CLI。
 - SSE 连接时长较长，需要确认 nginx/代理层超时配置不会过早切断连接。
-- 实时日志会持续占用 manager 与 node 之间的一个流式连接，必须确保连接关闭后资源释放。
+- 每个在线 node 会额外维持一条长期日志双向流，必须确保断线重连逻辑可靠。
+- 实时日志会持续占用 manager 与 node 之间的会话资源，必须确保订阅关闭后资源释放。
 - 历史日志与实时日志分区展示是设计要求，不能混排，否则“先实时、后历史”的顺序会破坏时间线理解。
