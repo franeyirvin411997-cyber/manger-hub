@@ -4,6 +4,7 @@ services:
   db:
     image: postgres:15-alpine
     container_name: mnp_postgres
+    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -20,6 +21,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.go
     container_name: mnp_manager
+    restart: always
     environment:
       DB_HOST: db
       DB_USER: postgres
@@ -40,6 +42,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.go
     container_name: mnp_node_1
+    restart: always
     environment:
       MANAGER_IP: manager
       HOSTNAME: node-test-1
@@ -56,6 +59,7 @@ services:
       context: ../web
       dockerfile: ../deploy/Dockerfile.web
     container_name: mnp_web
+    restart: always
     ports:
       - "80:80"
     networks:

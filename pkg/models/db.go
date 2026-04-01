@@ -15,7 +15,7 @@ var DB *gorm.DB
 // InitDB 初始化并连接 PostgreSQL 数据库
 func InitDB(dsn string) {
 	var err error
-	maxRetries := 5
+	maxRetries := 20
 	for i := 0; i < maxRetries; i++ {
 		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
