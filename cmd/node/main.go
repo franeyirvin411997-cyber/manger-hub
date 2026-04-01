@@ -93,12 +93,18 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 			groupID := payload.GroupID
 			proxyURL := payload.ProxyURL
 
-			// 1. 启动 Gost 容器作为本地隧道
-			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
-			gostCmd := exec.Command("docker", "run", "-d", "--name", gostContainerName, "ginuerzh/gost", "-L", ":1080", "-F", proxyURL)
-			if err := gostCmd.Run(); err != nil {
+			// 1. 启动 Tun2Socks 容器作为透明本地网关隧道 (替代代理软件的 HTTP_PROXY 局限)
+			tunContainerName := fmt.Sprintf("tunnel-%s", groupID)
+			tunCmd := exec.Command("docker", "run", "-d", "--name", tunContainerName,
+				"--restart=always",
+				"--mount", "type=bind,source=/dev/net/tun,target=/dev/net/tun",
+				"--cap-add=NET_ADMIN",
+				"-e", fmt.Sprintf("PROXY=%s", proxyURL),
+				"xjasonlyu/tun2socks:v2.6.0")
+
+			if err := tunCmd.Run(); err != nil {
 				resultStatus = "failed"
-				errMsg = fmt.Sprintf("Failed to start gost tunnel: %v", err)
+				errMsg = fmt.Sprintf("Failed to start tun2socks tunnel: %v", err)
 			} else {
 				// 解析应用清单
 				var appList []string
@@ -116,17 +122,15 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 					appConfigs = make(map[string]string)
 				}
 
-				// 2. 为每个选中的 App 启动一个容器，共享 Gost 容器的网络
+				// 2. 为每个选中的 App 启动一个容器，共享 Tun 容器的全局底层网络，强制所有流量走代理
 				for _, appIdentifier := range appList {
 					appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
 
 					var appCmd *exec.Cmd
 					baseArgs := []string{
 						"run", "-d", "--name", appContainerName,
-						"--network", fmt.Sprintf("container:%s", gostContainerName),
-						"-e", "http_proxy=http://127.0.0.1:1080",
-						"-e", "https_proxy=http://127.0.0.1:1080",
-						"-e", "all_proxy=socks5://127.0.0.1:1080",
+						"--network", fmt.Sprintf("container:%s", tunContainerName),
+						// 不再依赖 http_proxy，底层的 tun2socks 会接管这 Namespace 内的网卡路由
 					}
 
 					// 根据应用类型适配启动参数 (可根据实际 Docker 镜像参数调整)
@@ -181,8 +185,8 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 				exec.Command("docker", "rm", "-f", appContainerName).Run()
 			}
 
-			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
-			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+			tunContainerName := fmt.Sprintf("tunnel-%s", groupID)
+			exec.Command("docker", "rm", "-f", tunContainerName).Run()
 
 			// 清理遗留容器（兼容以前单一app命名的容器）
 			exec.Command("docker", "rm", "-f", fmt.Sprintf("app-%s", groupID)).Run()
@@ -214,18 +218,24 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 			}
 
 			// 停止旧容器
-			gostContainerName := fmt.Sprintf("tunnel-%s", groupID)
-			exec.Command("docker", "rm", "-f", gostContainerName).Run()
+			tunContainerName := fmt.Sprintf("tunnel-%s", groupID)
+			exec.Command("docker", "rm", "-f", tunContainerName).Run()
 			exec.Command("docker", "rm", "-f", fmt.Sprintf("app-%s", groupID)).Run() // 遗留清理
 			for _, appIdentifier := range appList {
 				appContainerName := fmt.Sprintf("app-%s-%s", appIdentifier, groupID)
 				exec.Command("docker", "rm", "-f", appContainerName).Run()
 			}
 
-			gostCmd := exec.Command("docker", "run", "-d", "--name", gostContainerName, "ginuerzh/gost", "-L", ":1080", "-F", proxyURL)
-			if err := gostCmd.Run(); err != nil {
+			tunCmd := exec.Command("docker", "run", "-d", "--name", tunContainerName,
+				"--restart=always",
+				"--mount", "type=bind,source=/dev/net/tun,target=/dev/net/tun",
+				"--cap-add=NET_ADMIN",
+				"-e", fmt.Sprintf("PROXY=%s", proxyURL),
+				"xjasonlyu/tun2socks:v2.6.0")
+
+			if err := tunCmd.Run(); err != nil {
 				resultStatus = "failed"
-				errMsg = fmt.Sprintf("Failed to restart gost tunnel: %v", err)
+				errMsg = fmt.Sprintf("Failed to restart tun2socks tunnel: %v", err)
 			} else {
 				// 重启选中的应用
 				for _, appIdentifier := range appList {
@@ -233,10 +243,7 @@ func handleTask(client pb.NodeServiceClient, task *pb.Task) {
 					var appCmd *exec.Cmd
 					baseArgs := []string{
 						"run", "-d", "--name", appContainerName,
-						"--network", fmt.Sprintf("container:%s", gostContainerName),
-						"-e", "http_proxy=http://127.0.0.1:1080",
-						"-e", "https_proxy=http://127.0.0.1:1080",
-						"-e", "all_proxy=socks5://127.0.0.1:1080",
+						"--network", fmt.Sprintf("container:%s", tunContainerName),
 					}
 
 					switch appIdentifier {
