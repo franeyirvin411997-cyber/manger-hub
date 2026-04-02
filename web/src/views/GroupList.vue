@@ -1,81 +1,42 @@
 <template>
   <div>
-    <h2>代理组编排</h2>
-    <el-button type="primary" @click="dialogVisible = true" style="margin-bottom: 20px;">创建代理组</el-button>
+    <h2>代理组管理</h2>
+    <el-button type="primary" @click="$router.push('/deploy')" style="margin-bottom: 20px;">创建代理组</el-button>
 
     <el-table :data="groups" border style="width: 100%">
-      <el-table-column prop="id" label="代理组ID" width="300"></el-table-column>
-      <el-table-column prop="node_id" label="部署节点" width="200"></el-table-column>
-      <el-table-column prop="tunnel_type" label="隧道类型" width="120"></el-table-column>
-      <el-table-column prop="apps" label="应用清单" width="200"></el-table-column>
-      <el-table-column prop="created_at" label="创建时间"></el-table-column>
+      <el-table-column prop="id" label="代理组ID" width="120">
+        <template #default="{ row }">{{ row.id?.substring(0,8) }}</template>
+      </el-table-column>
+      <el-table-column prop="display_name" label="名称" width="150" />
+      <el-table-column prop="node_id" label="节点" width="140">
+        <template #default="{ row }">{{ row.node_id?.substring(0,12) }}</template>
+      </el-table-column>
+      <el-table-column prop="tunnel_type" label="隧道" width="100" />
+      <el-table-column label="代理" width="160">
+        <template #default="{ row }">{{ row.proxy_host ? `${row.proxy_protocol || ''}://${row.proxy_host}:${row.proxy_port}` : '-' }}</template>
+      </el-table-column>
+      <el-table-column prop="current_state" label="状态" width="110">
+        <template #default="{ row }">
+          <el-tag :type="row.current_state === 'running' ? 'success' : row.current_state === 'error' ? 'danger' : row.current_state === 'stopped' ? 'info' : 'warning'">
+            {{ row.current_state || 'unknown' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="apps" label="应用" width="150" />
+      <el-table-column prop="last_error" label="错误" min-width="120">
+        <template #default="{ row }"><span style="color: #F56C6C; font-size: 12px;">{{ row.last_error }}</span></template>
+      </el-table-column>
       <el-table-column label="操作" width="380">
-        <template #default="scope">
-          <el-button type="success" size="small" @click="handleLifecycle(scope.row.id, 'start')">启动</el-button>
-          <el-button type="info" size="small" @click="handleLifecycle(scope.row.id, 'stop')">停止</el-button>
-          <el-button type="warning" size="small" @click="handleLifecycle(scope.row.id, 'restart')">重启</el-button>
-          <el-button type="warning" size="small" @click="handleReplaceProxy(scope.row)">换代理</el-button>
-          <el-button type="primary" size="small" @click="handleMigrateNode(scope.row)">迁移</el-button>
-          <el-button type="danger" size="small" @click="handleDelete(scope.row.id)">删除</el-button>
+        <template #default="{ row }">
+          <el-button type="success" size="small" @click="handleLifecycle(row.id, 'start')">启动</el-button>
+          <el-button type="info" size="small" @click="handleLifecycle(row.id, 'stop')">停止</el-button>
+          <el-button type="warning" size="small" @click="handleLifecycle(row.id, 'restart')">重启</el-button>
+          <el-button type="warning" size="small" @click="handleReplaceProxy(row)">换代理</el-button>
+          <el-button type="primary" size="small" @click="handleMigrateNode(row)">迁移</el-button>
+          <el-button type="danger" size="small" @click="handleDelete(row.id)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
-
-    <el-dialog v-model="dialogVisible" title="创建代理组" width="50%">
-      <el-form :model="form" label-width="120px">
-        <el-form-item label="部署节点">
-          <el-select v-model="form.node_id" placeholder="请选择节点" style="width: 100%;">
-            <el-option v-for="node in nodes" :key="node.id" :label="node.display_name" :value="node.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="隧道类型">
-          <el-select v-model="form.tunnel_type" style="width: 100%;">
-            <el-option label="gost" value="gost" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="选择应用">
-          <el-select v-model="selectedApps" multiple placeholder="请选择应用模板" style="width: 100%;">
-            <el-option v-for="app in appTemplates" :key="app.identifier" :label="app.display_name" :value="app.identifier" />
-          </el-select>
-        </el-form-item>
-
-        <div v-for="appId in selectedApps" :key="appId" style="margin-left: 20px; border-left: 2px solid #409EFF; padding-left: 10px;">
-          <h4>{{ getAppName(appId) }} 配置</h4>
-          <!-- traffmonetizer -->
-          <el-form-item label="Token" v-if="appId === 'traffmonetizer'">
-            <el-input v-model="appConfigs['traffmonetizer_token']" placeholder="Traffmonetizer Token"></el-input>
-          </el-form-item>
-
-          <!-- repocket -->
-          <el-form-item label="Email" v-if="appId === 'repocket'">
-            <el-input v-model="appConfigs['repocket_email']" placeholder="Repocket Email"></el-input>
-          </el-form-item>
-          <el-form-item label="API Key" v-if="appId === 'repocket'">
-            <el-input v-model="appConfigs['repocket_api_key']" placeholder="Repocket API Key"></el-input>
-          </el-form-item>
-
-          <!-- honeygain -->
-          <el-form-item label="Email" v-if="appId === 'honeygain'">
-            <el-input v-model="appConfigs['honeygain_email']" placeholder="Honeygain Email"></el-input>
-          </el-form-item>
-          <el-form-item label="Password" v-if="appId === 'honeygain'">
-            <el-input type="password" v-model="appConfigs['honeygain_password']" placeholder="Honeygain Password"></el-input>
-          </el-form-item>
-
-          <!-- packetstream -->
-          <el-form-item label="CID" v-if="appId === 'packetstream'">
-            <el-input v-model="appConfigs['packetstream_cid']" placeholder="PacketStream CID"></el-input>
-          </el-form-item>
-        </div>
-
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitForm">创建</el-button>
-        </span>
-      </template>
-    </el-dialog>
 
     <el-dialog v-model="migrateDialogVisible" title="迁移代理组到新节点" width="30%">
       <el-form :model="migrateForm" label-width="100px">
@@ -102,18 +63,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const groups = ref([])
 const nodes = ref([])
-const appTemplates = ref([])
-const dialogVisible = ref(false)
-
-const selectedApps = ref([])
-const appConfigs = ref({})
-
-const form = ref({
-  node_id: '',
-  tunnel_type: 'gost',
-  apps: '[]',
-  app_configs: '{}'
-})
 
 const migrateDialogVisible = ref(false)
 const currentMigrateGroup = ref(null)
@@ -123,14 +72,8 @@ const migrateForm = ref({
 
 const fetchData = async () => {
   try {
-    const resGroups = await axios.get('/api/v1/groups')
-    groups.value = resGroups.data.data || []
-
-    const resNodes = await axios.get('/api/v1/nodes')
-    nodes.value = resNodes.data.data || []
-
-    const resApps = await axios.get('/api/v1/apps')
-    appTemplates.value = resApps.data.data || []
+    groups.value = (await axios.get('/api/v1/groups')).data.data || []
+    nodes.value = (await axios.get('/api/v1/nodes')).data.data || []
   } catch (e) {
     ElMessage.error('数据加载失败')
   }
@@ -139,24 +82,6 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
 })
-
-const getAppName = (id) => {
-  const tmpl = appTemplates.value.find(t => t.identifier === id)
-  return tmpl ? tmpl.display_name : id
-}
-
-const submitForm = async () => {
-  try {
-    form.value.apps = JSON.stringify(selectedApps.value)
-    form.value.app_configs = JSON.stringify(appConfigs.value)
-    await axios.post('/api/v1/groups', form.value)
-    ElMessage.success('创建指令已下发')
-    dialogVisible.value = false
-    fetchData()
-  } catch (err) {
-    ElMessage.error('创建失败: ' + err.message)
-  }
-}
 
 const handleLifecycle = async (id, action) => {
   try {

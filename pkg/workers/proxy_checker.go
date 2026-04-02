@@ -28,7 +28,7 @@ func StartProxyLifecycleChecker() {
 }
 
 func checkAndPromoteProxy(proxy models.ProxyResource) {
-	address := fmt.Sprintf("%s:%d", proxy.Host, proxy.Port)
+	address := net.JoinHostPort(proxy.Host, fmt.Sprintf("%d", proxy.Port))
 	start := time.Now()
 
 	// 简单 TCP Dial 检测 (首期测活实现)

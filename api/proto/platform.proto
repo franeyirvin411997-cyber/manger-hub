@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package platform;
 
-option go_package = "platform/api/pb";
+option go_package = "multi_node_platform/api/pb";
 
 // Node Registration Request
 message RegisterRequest {
@@ -10,6 +10,9 @@ message RegisterRequest {
     string hostname = 2;
     string version = 3;
     repeated string capabilities = 4; // 例如支持的隧道或能力
+    string display_name = 5;
+    string enrollment_id = 6;
+    string enrollment_token = 7;
 }
 
 message RegisterResponse {
@@ -56,6 +59,18 @@ message TaskResultResponse {
     bool success = 1;
 }
 
+message LogEnvelope {
+    string message_type = 1;
+    string subscription_id = 2;
+    string node_id = 3;
+    string token = 4;
+    string source_type = 5;
+    string container_name = 6;
+    string stream_type = 7;
+    string content = 8;
+    int64 timestamp_unix = 9;
+}
+
 service NodeService {
     // 节点注册
     rpc Register(RegisterRequest) returns (RegisterResponse);
@@ -63,4 +78,6 @@ service NodeService {
     rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
     // 任务结果回传
     rpc ReportTaskResult(TaskResult) returns (TaskResultResponse);
+    // 日志双向流
+    rpc LogStream(stream LogEnvelope) returns (stream LogEnvelope);
 }

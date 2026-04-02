@@ -22,9 +22,16 @@
       <el-table-column prop="pool_type" label="池类型" width="120"></el-table-column>
       <el-table-column prop="status" label="状态" width="120">
         <template #default="scope">
-          <el-tag :type="scope.row.status === 'online' ? 'success' : 'info'">
+          <el-tag :type="scope.row.status === 'online' ? 'success' : scope.row.status === 'in_use' ? 'warning' : 'info'">
             {{ scope.row.status }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="220">
+        <template #default="{ row }">
+          <el-button size="small" type="success" v-if="row.pool_type === 'observer'" @click="promote(row.id)">晋升</el-button>
+          <el-button size="small" type="warning" v-if="row.pool_type === 'formal' && row.status !== 'in_use'" @click="demote(row.id)">降级</el-button>
+          <el-button size="small" type="danger" v-if="row.status !== 'in_use'" @click="delProxy(row.id)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -63,7 +70,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const uploadHeaders = computed(() => {
   const token = localStorage.getItem('auth_token')
@@ -107,5 +114,26 @@ const handleUploadSuccess = (response) => {
 
 const handleUploadError = (err) => {
   ElMessage.error('导入失败')
+}
+
+const promote = async (id) => {
+  await axios.post(`/api/v1/proxies/${id}/promote`)
+  ElMessage.success('已晋升到正式池')
+  fetchProxies()
+}
+
+const demote = async (id) => {
+  await axios.post(`/api/v1/proxies/${id}/demote`)
+  ElMessage.success('已降级到观察池')
+  fetchProxies()
+}
+
+const delProxy = async (id) => {
+  try {
+    await ElMessageBox.confirm('确定删除？')
+    await axios.delete(`/api/v1/proxies/${id}`)
+    ElMessage.success('已删除')
+    fetchProxies()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '删除失败') }
 }
 </script>

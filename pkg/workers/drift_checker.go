@@ -2,6 +2,7 @@ package workers
 
 import (
 	"log"
+	"strconv"
 	"time"
 
 	"multi_node_platform/pkg/models"
@@ -13,8 +14,16 @@ func StartDriftChecker() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 1. 节点离线检测: 超过 3 分钟未上报心跳视为离线
-		threshold := time.Now().Add(-3 * time.Minute)
+		// 从配置读取阈值，默认 180 秒
+		thresholdStr := models.GetConfig("node_offline_threshold_sec")
+		thresholdSec := 180
+		if thresholdStr != "" {
+			if v, err := strconv.Atoi(thresholdStr); err == nil {
+				thresholdSec = v
+			}
+		}
+
+		threshold := time.Now().Add(-time.Duration(thresholdSec) * time.Second)
 		res := models.DB.Model(&models.Node{}).
 			Where("last_heartbeat_at < ? AND online_state = ?", threshold, "online").
 			Update("online_state", "offline")

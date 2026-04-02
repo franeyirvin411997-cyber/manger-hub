@@ -6,127 +6,243 @@ import (
 	"gorm.io/gorm"
 )
 
+// ============================================================
+// 基础设施层
+// ============================================================
+
 // Node 表示远端执行节点
 type Node struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	DisplayName      string    `gorm:"type:varchar(128)" json:"display_name"`  // 显示名称
-	Hostname         string    `gorm:"type:varchar(128)" json:"hostname"`      // 主机信息
-	Token            string    `gorm:"type:varchar(256)" json:"token"`         // 接入身份凭证
-	Capabilities     string    `gorm:"type:text" json:"capabilities"`          // 节点能力，建议用 JSON 数组存储
-	LastHeartbeatAt  time.Time `json:"last_heartbeat_at"`                      // 最近心跳时间
-	OnlineState      string    `gorm:"type:varchar(32)" json:"online_state"`   // 在线状态投影: online, offline, unknown
-	Version          string    `gorm:"type:varchar(64)" json:"version"`        // 版本信息
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+	ID              string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	DisplayName     string         `gorm:"type:varchar(128)" json:"display_name"`
+	Hostname        string         `gorm:"type:varchar(128)" json:"hostname"`
+	IP              string         `gorm:"type:varchar(64)" json:"ip"`    // 节点可达 IP（注册时上报）
+	Token           string         `gorm:"type:varchar(256)" json:"-"`    // 不暴露给前端
+	Capabilities    string         `gorm:"type:text" json:"capabilities"` // JSON 数组
+	LastHeartbeatAt time.Time      `json:"last_heartbeat_at"`
+	OnlineState     string         `gorm:"type:varchar(32)" json:"online_state"` // online, offline, unknown
+	Version         string         `gorm:"type:varchar(64)" json:"version"`
+	MaxGroups       int            `gorm:"default:50" json:"max_groups"` // 该节点最大部署组数
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// ProxyResource 表示代理资源（正式池、观察池）
+// NodeEnrollment 表示节点一次性接入授权
+type NodeEnrollment struct {
+	ID              string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	DisplayName     string         `gorm:"type:varchar(128)" json:"display_name"`
+	ManagerHTTPAddr string         `gorm:"type:varchar(255)" json:"manager_http_addr"`
+	ManagerGrpcAddr string         `gorm:"type:varchar(255)" json:"manager_grpc_addr"`
+	TokenHash       string         `gorm:"type:char(64)" json:"-"`
+	ExpiresAt       time.Time      `json:"expires_at"`
+	UsedAt          *time.Time     `json:"used_at"`
+	UsedByNodeID    string         `gorm:"type:varchar(64)" json:"used_by_node_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ProxyResource 表示代理资源（观察池 → 正式池生命周期）
 type ProxyResource struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	Protocol         string    `gorm:"type:varchar(32)" json:"protocol"`       // 协议类型: socks5, http 等
-	Host             string    `gorm:"type:varchar(128)" json:"host"`          // 地址信息
-	Port             int       `json:"port"`                                   // 端口
-	Username         string    `gorm:"type:varchar(64)" json:"username"`       // 认证信息：用户名
-	Password         string    `gorm:"type:varchar(64)" json:"password"`       // 认证信息：密码
-	Source           string    `gorm:"type:varchar(64)" json:"source"`         // 来源
-	PoolType         string    `gorm:"type:varchar(32)" json:"pool_type"`      // 所属池类型: formal, observer, deprecated
-	QualityMetrics   string    `gorm:"type:text" json:"quality_metrics"`       // 质量指标，JSON
-	Tags             string    `gorm:"type:text" json:"tags"`                  // 标签，JSON
-	Status           string    `gorm:"type:varchar(32)" json:"status"`         // 可用性状态: online, offline, unknown
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	Protocol       string         `gorm:"type:varchar(32)" json:"protocol"`
+	Host           string         `gorm:"type:varchar(128)" json:"host"`
+	Port           int            `json:"port"`
+	Username       string         `gorm:"type:varchar(64)" json:"username"`
+	Password       string         `gorm:"type:varchar(64)" json:"-"` // API 脱敏
+	Source         string         `gorm:"type:varchar(64)" json:"source"`
+	PoolType       string         `gorm:"type:varchar(32)" json:"pool_type"` // formal, observer, deprecated
+	QualityMetrics string         `gorm:"type:text" json:"quality_metrics"`
+	Tags           string         `gorm:"type:text" json:"tags"`
+	Status         string         `gorm:"type:varchar(32)" json:"status"` // online, offline, unknown, in_use
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// ProxyLease 表示代理资源分配关系
+// ProxyLease 代理资源分配关系
 type ProxyLease struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	ProxyResourceID  string    `gorm:"index;type:varchar(64)" json:"proxy_resource_id"` // 使用的代理
-	GroupID          string    `gorm:"index;type:varchar(64)" json:"group_id"`          // 使用该代理的代理组
-	StartedAt        time.Time `json:"started_at"`                                      // 分配开始时间
-	EndedAt          *time.Time `json:"ended_at"`                                        // 分配结束时间（为空表示正在使用）
-	IsValid          bool      `json:"is_valid"`                                        // 分配是否有效
+	ID              string     `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	ProxyResourceID string     `gorm:"index;type:varchar(64)" json:"proxy_resource_id"`
+	GroupID         string     `gorm:"index;type:varchar(64)" json:"group_id"`
+	StartedAt       time.Time  `json:"started_at"`
+	EndedAt         *time.Time `json:"ended_at"`
+	IsValid         bool       `json:"is_valid"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// ============================================================
+// 编排层
+// ============================================================
+
+// GroupSpec 代理组期望配置
+type GroupSpec struct {
+	ID              string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	DisplayName     string         `gorm:"type:varchar(128)" json:"display_name"`
+	NodeID          string         `gorm:"index;type:varchar(64)" json:"node_id"`
+	ProxyLeaseID    string         `gorm:"type:varchar(64)" json:"proxy_lease_id"`
+	ProxyResourceID string         `gorm:"type:varchar(64)" json:"proxy_resource_id"` // 冗余方便查询
+	TunnelType      string         `gorm:"type:varchar(32)" json:"tunnel_type"`       // tun2socks, tun2proxy
+	Apps            string         `gorm:"type:text" json:"apps"`                     // JSON 数组 app identifier
+	AppConfigs      string         `gorm:"type:text" json:"app_configs"`              // 兼容旧格式
+	AccountBindings string         `gorm:"type:text" json:"account_bindings"`         // JSON: {"app_id":"account_id",...}
+	ExtConfigs      string         `gorm:"type:text" json:"ext_configs"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// GroupRuntime 代理组运行投影
+type GroupRuntime struct {
+	GroupID        string    `gorm:"primaryKey;type:varchar(64)" json:"group_id"`
+	CurrentState   string    `gorm:"type:varchar(32)" json:"current_state"` // pending, deploying, running, partial, stopped, error, deleting
+	TunnelState    string    `gorm:"type:varchar(32)" json:"tunnel_state"`
+	AppStates      string    `gorm:"type:text" json:"app_states"`
+	LastObservedAt time.Time `json:"last_observed_at"`
+	LastError      string    `gorm:"type:text" json:"last_error"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// ============================================================
+// 应用与账号层
+// ============================================================
+
+// AppTemplate 应用模板
+type AppTemplate struct {
+	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	Identifier       string    `gorm:"uniqueIndex;type:varchar(64)" json:"identifier"`
+	DisplayName      string    `gorm:"type:varchar(128)" json:"display_name"`
+	DefaultImage     string    `gorm:"type:varchar(256)" json:"default_image"`
+	SupportedConfigs string    `gorm:"type:text" json:"supported_configs"` // JSON 数组 ["email","password"]
+	CommandTemplate  string    `gorm:"type:text" json:"command_template"`  // JSON 数组模板
+	DriverType       string    `gorm:"type:varchar(64)" json:"driver_type"`
+	RiskRules        string    `gorm:"type:text" json:"risk_rules"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// Rule 表示自动化运维规则
+// AppAccount 应用平台账号（如某个 Honeygain 账号）
+type AppAccount struct {
+	ID            string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	AppIdentifier string         `gorm:"index;type:varchar(64)" json:"app_identifier"` // 关联 AppTemplate.Identifier
+	DisplayName   string         `gorm:"type:varchar(128)" json:"display_name"`        // 如 "HG主号"
+	Credentials   string         `gorm:"type:text" json:"-"`                           // AES 加密 JSON {"email":"x","password":"y"}
+	Status        string         `gorm:"type:varchar(32)" json:"status"`               // active, suspended, banned, unknown
+	Notes         string         `gorm:"type:text" json:"notes"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// AppAccountView 前端查看用（解密后脱敏展示）
+type AppAccountView struct {
+	AppAccount
+	CredentialKeys []string `json:"credential_keys" gorm:"-"` // 只返回有哪些 key，不返回 value
+	MaskedCreds    string   `json:"masked_credentials" gorm:"-"`
+}
+
+// AccountGroupBinding 账号与代理组中某 app 的绑定
+type AccountGroupBinding struct {
+	ID            string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	AccountID     string    `gorm:"index;type:varchar(64)" json:"account_id"`
+	GroupID       string    `gorm:"index;type:varchar(64)" json:"group_id"`
+	AppIdentifier string    `gorm:"type:varchar(64)" json:"app_identifier"`
+	Status        string    `gorm:"type:varchar(32)" json:"status"` // bound, unbound
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ============================================================
+// 浏览器层
+// ============================================================
+
+// BrowserInstance 远程浏览器实例
+type BrowserInstance struct {
+	ID                  string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	DisplayName         string         `gorm:"type:varchar(128)" json:"display_name"`
+	NodeID              string         `gorm:"index;type:varchar(64)" json:"node_id"`
+	ProxyResourceID     string         `gorm:"index;type:varchar(64)" json:"proxy_resource_id"` // 直接指定代理
+	AccountID           string         `gorm:"index;type:varchar(64)" json:"account_id"`        // 绑定的账号
+	ContainerName       string         `gorm:"type:varchar(128)" json:"container_name"`
+	TunnelContainerName string         `gorm:"type:varchar(128)" json:"tunnel_container_name"`
+	TunnelType          string         `gorm:"type:varchar(32)" json:"tunnel_type"`
+	BrowserImage        string         `gorm:"type:varchar(256)" json:"browser_image"`
+	VNCPort             int            `json:"vnc_port"`
+	CDPPort             int            `json:"cdp_port"`
+	VNCPassword         string         `gorm:"type:varchar(64)" json:"-"`
+	Status              string         `gorm:"type:varchar(32)" json:"status"` // pending, running, stopped, error
+	LastError           string         `gorm:"type:text" json:"last_error"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ============================================================
+// 自动化规则与运维
+// ============================================================
+
+// Rule 自动化运维规则
 type Rule struct {
-	ID          string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	Name        string    `gorm:"type:varchar(128)" json:"name"`         // 规则名称
-	Description string    `gorm:"type:varchar(256)" json:"description"`  // 规则描述
-	Condition   string    `gorm:"type:text" json:"condition"`            // 触发条件表达式 (例如: latency > 500)
-	Action      string    `gorm:"type:text" json:"action"`               // 触发动作 (例如: mark_offline)
-	IsEnabled   bool      `json:"is_enabled"`                            // 是否启用
+	ID          string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	Name        string    `gorm:"type:varchar(128)" json:"name"`
+	Description string    `gorm:"type:varchar(256)" json:"description"`
+	Condition   string    `gorm:"type:text" json:"condition"`
+	Action      string    `gorm:"type:text" json:"action"`
+	IsEnabled   bool      `json:"is_enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// GroupSpec 表示代理组的期望配置
-type GroupSpec struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	NodeID           string    `gorm:"index;type:varchar(64)" json:"node_id"` // 目标节点
-	ProxyLeaseID     string    `gorm:"type:varchar(64)" json:"proxy_lease_id"` // 目标代理分配
-	TunnelType       string    `gorm:"type:varchar(32)" json:"tunnel_type"`    // 隧道类型，如 gost
-	Apps             string    `gorm:"type:text" json:"apps"`                  // 应用清单（JSON 数组）
-	AppConfigs       string    `gorm:"type:text" json:"app_configs"`           // 应用配置（JSON）
-	ExtConfigs       string    `gorm:"type:text" json:"ext_configs"`           // 扩展配置
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-}
-
-// GroupRuntime 表示代理组的运行投影（实际状态）
-type GroupRuntime struct {
-	GroupID          string    `gorm:"primaryKey;type:varchar(64)" json:"group_id"` // 与 GroupSpec 一对一
-	CurrentState     string    `gorm:"type:varchar(32)" json:"current_state"`       // 当前状态: pending, deploying, running, partial, stopped, error, deleting
-	TunnelState      string    `gorm:"type:varchar(32)" json:"tunnel_state"`        // 当前隧道状态
-	AppStates        string    `gorm:"type:text" json:"app_states"`                 // 当前应用实例状态，JSON
-	LastObservedAt   time.Time `json:"last_observed_at"`                            // 最近观测时间
-	LastError        string    `gorm:"type:text" json:"last_error"`                 // 最近错误信息
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-}
-
-// AppTemplate 表示应用模板（受支持的应用类型）
-type AppTemplate struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	Identifier       string    `gorm:"uniqueIndex;type:varchar(64)" json:"identifier"` // 应用标识
-	DisplayName      string    `gorm:"type:varchar(128)" json:"display_name"`          // 展示名称
-	DefaultImage     string    `gorm:"type:varchar(256)" json:"default_image"`         // 默认镜像或运行源
-	SupportedConfigs string    `gorm:"type:text" json:"supported_configs"`             // 支持的配置项（JSON 数组，如 ["email", "password"]）
-	CommandTemplate  string    `gorm:"type:text" json:"command_template"`              // 启动命令模板（JSON 数组模板，如 ["-e", "EMAIL={{email}}", "image:latest"]）
-	DriverType       string    `gorm:"type:varchar(64)" json:"driver_type"`            // 运行驱动类型
-	RiskRules        string    `gorm:"type:text" json:"risk_rules"`                    // 日志风控默认规则
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-}
-
-// Operation 表示关键业务变更操作
+// Operation 关键业务变更操作
 type Operation struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	Type             string    `gorm:"type:varchar(64)" json:"type"`           // 操作类型: create_group, replace_proxy, migrate_node 等
-	TargetID         string    `gorm:"index;type:varchar(64)" json:"target_id"`// 目标对象 ID
-	Status           string    `gorm:"type:varchar(32)" json:"status"`         // 状态: pending, running, success, failed
-	ErrorMessage     string    `gorm:"type:text" json:"error_message"`         // 错误信息
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID           string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	Type         string    `gorm:"type:varchar(64)" json:"type"`
+	TargetID     string    `gorm:"index;type:varchar(64)" json:"target_id"`
+	Status       string    `gorm:"type:varchar(32)" json:"status"`
+	ErrorMessage string    `gorm:"type:text" json:"error_message"`
+	Operator     string    `gorm:"type:varchar(64)" json:"operator"` // admin, tgbot, ai
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// Task 表示发往节点执行端的具体动作
+// Task 发往节点的执行动作
 type Task struct {
-	ID               string    `gorm:"primaryKey;type:varchar(64)" json:"id"` // 唯一 ID
-	OperationID      string    `gorm:"index;type:varchar(64)" json:"operation_id"` // 所属操作 ID
-	NodeID           string    `gorm:"index;type:varchar(64)" json:"node_id"`      // 目标节点
-	Type             string    `gorm:"type:varchar(64)" json:"type"`               // 任务类型
-	Payload          string    `gorm:"type:text" json:"payload"`                   // 任务载荷 JSON
-	Status           string    `gorm:"type:varchar(32)" json:"status"`             // 任务状态: pending, running, success, failed, canceled
-	ScopeKey         string    `gorm:"type:varchar(128)" json:"scope_key"`         // 作用域键
-	Timeout          int       `json:"timeout"`                                    // 超时时间(秒)
-	RetryCount       int       `json:"retry_count"`                                // 重试次数
-	ErrorMessage     string    `gorm:"type:text" json:"error_message"`             // 错误信息
-	Result           string    `gorm:"type:text" json:"result"`                    // 任务结果 JSON
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID           string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	OperationID  string    `gorm:"index;type:varchar(64)" json:"operation_id"`
+	NodeID       string    `gorm:"index;type:varchar(64)" json:"node_id"`
+	Type         string    `gorm:"type:varchar(64)" json:"type"`
+	Payload      string    `gorm:"type:text" json:"payload"`
+	Status       string    `gorm:"type:varchar(32)" json:"status"`           // pending, running, success, failed, canceled
+	ScopeKey     string    `gorm:"type:varchar(128);index" json:"scope_key"` // 防重复：group_id:action_type
+	Timeout      int       `json:"timeout"`
+	RetryCount   int       `json:"retry_count"`
+	ErrorMessage string    `gorm:"type:text" json:"error_message"`
+	Result       string    `gorm:"type:text" json:"result"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// ============================================================
+// 系统配置与 AI
+// ============================================================
+
+// SystemConfig 系统配置 KV 表
+type SystemConfig struct {
+	Key         string    `gorm:"primaryKey;type:varchar(128)" json:"key"`
+	Value       string    `gorm:"type:text" json:"value"`
+	Description string    `gorm:"type:varchar(256)" json:"description"`
+	Category    string    `gorm:"type:varchar(64);index" json:"category"` // general, proxy, browser, tgbot, ai
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AIActionLog AI 操作日志
+type AIActionLog struct {
+	ID          string    `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	Source      string    `gorm:"type:varchar(32)" json:"source"` // web, tgbot
+	UserInput   string    `gorm:"type:text" json:"user_input"`
+	ParsedTools string    `gorm:"type:text" json:"parsed_tools"` // JSON: 解析出的工具调用
+	Result      string    `gorm:"type:text" json:"result"`
+	Status      string    `gorm:"type:varchar(32)" json:"status"` // success, failed, partial
+	CreatedAt   time.Time `json:"created_at"`
 }

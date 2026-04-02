@@ -12,7 +12,6 @@ import (
 
 var DB *gorm.DB
 
-// InitDB 初始化并连接 PostgreSQL 数据库
 func InitDB(dsn string) {
 	var err error
 	maxRetries := 20
@@ -21,80 +20,71 @@ func InitDB(dsn string) {
 		if err == nil {
 			break
 		}
-		log.Printf("无法连接到数据库 (重试 %d/%d): %v", i+1, maxRetries, err)
+		log.Printf("数据库连接重试 (%d/%d): %v", i+1, maxRetries, err)
 		time.Sleep(3 * time.Second)
 	}
-
 	if err != nil {
-		log.Fatalf("无法连接到数据库，已达到最大重试次数: %v", err)
+		log.Fatalf("数据库连接失败: %v", err)
 	}
 
-	// 自动迁移模式，确保数据表结构与模型定义一致
 	err = DB.AutoMigrate(
 		&Node{},
+		&NodeEnrollment{},
 		&ProxyResource{},
 		&ProxyLease{},
 		&GroupSpec{},
 		&GroupRuntime{},
 		&AppTemplate{},
+		&AppAccount{},
+		&AccountGroupBinding{},
+		&BrowserInstance{},
 		&Operation{},
 		&Task{},
 		&Rule{},
+		&SystemConfig{},
+		&AIActionLog{},
 	)
 	if err != nil {
-		log.Fatalf("自动迁移数据库失败: %v", err)
+		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
-	fmt.Println("数据库初始化成功，并已完成自动迁移。")
+	log.Println("数据库初始化完成")
 	seedAppTemplates()
+	seedSystemConfigs()
 }
 
 func seedAppTemplates() {
 	templates := []AppTemplate{
 		{
-			ID:               "app-traffmonetizer",
-			Identifier:       "traffmonetizer",
-			DisplayName:      "Traffmonetizer",
-			DefaultImage:     "traffmonetizer/cli_v2:latest",
-			SupportedConfigs: `["token"]`,
-			CommandTemplate:  `["traffmonetizer/cli_v2:latest", "start", "accept", "--token", "{{token}}"]`,
-			DriverType:       "docker",
+			ID: "app-traffmonetizer", Identifier: "traffmonetizer", DisplayName: "Traffmonetizer",
+			DefaultImage: "traffmonetizer/cli_v2:latest", SupportedConfigs: `["token"]`,
+			CommandTemplate: `["traffmonetizer/cli_v2:latest", "start", "accept", "--token", "{{token}}"]`,
+			DriverType:      "docker",
 		},
 		{
-			ID:               "app-repocket",
-			Identifier:       "repocket",
-			DisplayName:      "Repocket",
-			DefaultImage:     "repocket/repocket:latest",
-			SupportedConfigs: `["email", "api_key"]`,
-			CommandTemplate:  `["-e", "RP_EMAIL={{email}}", "-e", "RP_API_KEY={{api_key}}", "repocket/repocket:latest"]`,
-			DriverType:       "docker",
+			ID: "app-repocket", Identifier: "repocket", DisplayName: "Repocket",
+			DefaultImage: "repocket/repocket:latest", SupportedConfigs: `["email", "api_key"]`,
+			CommandTemplate: `["-e", "RP_EMAIL={{email}}", "-e", "RP_API_KEY={{api_key}}", "repocket/repocket:latest"]`,
+			DriverType:      "docker",
 		},
 		{
-			ID:               "app-honeygain",
-			Identifier:       "honeygain",
-			DisplayName:      "Honeygain",
-			DefaultImage:     "honeygain/honeygain:latest",
-			SupportedConfigs: `["email", "password", "device"]`,
-			CommandTemplate:  `["honeygain/honeygain:latest", "-tou-accept", "-email", "{{email}}", "-pass", "{{password}}", "-device", "{{device}}"]`,
-			DriverType:       "docker",
+			ID: "app-honeygain", Identifier: "honeygain", DisplayName: "Honeygain",
+			DefaultImage: "honeygain/honeygain:latest", SupportedConfigs: `["email", "password", "device"]`,
+			CommandTemplate: `["honeygain/honeygain:latest", "-tou-accept", "-email", "{{email}}", "-pass", "{{password}}", "-device", "{{device}}"]`,
+			DriverType:      "docker",
 		},
 		{
-			ID:               "app-packetstream",
-			Identifier:       "packetstream",
-			DisplayName:      "PacketStream",
-			DefaultImage:     "packetstream/psclient:latest",
-			SupportedConfigs: `["cid"]`,
-			CommandTemplate:  `["-e", "CID={{cid}}", "packetstream/psclient:latest"]`,
-			DriverType:       "docker",
+			ID: "app-packetstream", Identifier: "packetstream", DisplayName: "PacketStream",
+			DefaultImage: "packetstream/psclient:latest", SupportedConfigs: `["cid"]`,
+			CommandTemplate: `["-e", "CID={{cid}}", "packetstream/psclient:latest"]`,
+			DriverType:      "docker",
 		},
 	}
-
 	for _, t := range templates {
 		var existing AppTemplate
 		if DB.Where("identifier = ?", t.Identifier).First(&existing).Error != nil {
 			DB.Create(&t)
 		} else if existing.CommandTemplate == "" {
-			// 兼容旧数据升级
 			DB.Model(&existing).Updates(map[string]interface{}{
 				"supported_configs": t.SupportedConfigs,
 				"command_template":  t.CommandTemplate,
@@ -103,7 +93,48 @@ func seedAppTemplates() {
 	}
 }
 
-// GetDSNFromEnv 从环境变量中获取数据库连接字符串
+func seedSystemConfigs() {
+	defaults := []SystemConfig{
+		{Key: "heartbeat_interval_sec", Value: "10", Description: "节点心跳间隔(秒)", Category: "general"},
+		{Key: "drift_check_interval_sec", Value: "30", Description: "漂移检测间隔(秒)", Category: "general"},
+		{Key: "node_offline_threshold_sec", Value: "180", Description: "节点离线判定阈值(秒)", Category: "general"},
+		{Key: "data_retention_days", Value: "7", Description: "操作/任务记录保留天数", Category: "general"},
+		{Key: "proxy_check_interval_sec", Value: "60", Description: "代理存活检测间隔(秒)", Category: "proxy"},
+		{Key: "default_tunnel_type", Value: "tun2socks", Description: "默认隧道类型", Category: "proxy"},
+		{Key: "tun2socks_image", Value: "xjasonlyu/tun2socks:v2.6.0", Description: "tun2socks 镜像", Category: "proxy"},
+		{Key: "tun2proxy_image", Value: "ghcr.io/blechschmidt/tun2proxy:latest", Description: "tun2proxy 镜像", Category: "proxy"},
+		{Key: "browser_image", Value: "kasmweb/chromium:1.16.1", Description: "默认浏览器镜像", Category: "browser"},
+		{Key: "browser_vnc_password", Value: "changeme", Description: "浏览器 VNC 默认密码", Category: "browser"},
+		{Key: "tgbot_token", Value: "", Description: "Telegram Bot Token", Category: "tgbot"},
+		{Key: "tgbot_admin_ids", Value: "[]", Description: "允许操作的 Telegram 用户 ID 列表 (JSON)", Category: "tgbot"},
+		{Key: "ai_provider", Value: "openai", Description: "AI 提供商: openai, anthropic, xai", Category: "ai"},
+		{Key: "ai_api_key", Value: "", Description: "AI API Key", Category: "ai"},
+		{Key: "ai_model", Value: "gpt-4o", Description: "AI 模型名称", Category: "ai"},
+		{Key: "ai_base_url", Value: "https://api.openai.com/v1", Description: "AI API Base URL", Category: "ai"},
+		{Key: "webhook_url", Value: "", Description: "告警 Webhook URL", Category: "general"},
+	}
+	for _, c := range defaults {
+		var existing SystemConfig
+		if DB.Where("key = ?", c.Key).First(&existing).Error != nil {
+			DB.Create(&c)
+		}
+	}
+}
+
+// GetConfig 获取系统配置值
+func GetConfig(key string) string {
+	var c SystemConfig
+	if DB.Where("key = ?", key).First(&c).Error == nil {
+		return c.Value
+	}
+	return ""
+}
+
+// SetConfig 设置系统配置值
+func SetConfig(key, value string) {
+	DB.Model(&SystemConfig{}).Where("key = ?", key).Update("value", value)
+}
+
 func GetDSNFromEnv() string {
 	host := os.Getenv("DB_HOST")
 	if host == "" {
@@ -125,7 +156,6 @@ func GetDSNFromEnv() string {
 	if port == "" {
 		port = "5432"
 	}
-
 	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=UTC",
 		host, user, password, dbname, port)
 }
